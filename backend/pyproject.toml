@@ -21,6 +21,9 @@ dependencies = [
     "pyarrow==25.0.1",
     "openpyxl==3.1.5",
     "charset-normalizer==3.5.1",
+    "docker==7.1.0",
+    "jupyter-client==8.6.3",
+    "nbformat==5.10.4",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +33,13 @@ dev = [
     "httpx==0.27.2",
     "ruff==0.6.8",
     "mypy==1.11.2",
+    # Only needed to `exec()` rendered analysis templates directly in tests (no Docker);
+    # the sandboxed kernel image (backend/kernel_image/) pins its own, separate versions.
+    "matplotlib==3.10.0",
+    "seaborn==0.13.2",
+    "scipy==1.16.3",
+    "statsmodels==0.14.4",
+    "ipython==8.27.0",
 ]
 
 [tool.ruff]
@@ -47,10 +57,20 @@ python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
+# These are untyped (no inline annotations, no stubs); treat their exports as Any rather
+# than erroring on every untyped call.
+[[tool.mypy.overrides]]
+module = ["nbformat.*", "jupyter_client.*", "docker.*"]
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# `docker`-marked tests need real Docker + the kernel/relay images built; excluded from the
+# default run (see CLAUDE.md), run explicitly with `pytest -m docker`.
+addopts = "-m 'not docker'"
+markers = ["docker: needs Docker and the built datapilot-kernel(-relay) images"]
 
 [build-system]
 requires = ["setuptools>=68"]

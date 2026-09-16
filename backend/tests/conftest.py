@@ -16,8 +16,11 @@ from sqlalchemy.pool import NullPool
 
 from app.core.db import Base, get_db
 from app.core.storage import StorageBackend, get_storage_backend
+from app.execution.kernel_manager import KernelManager, get_execution_backend, get_kernel_manager
 from app.main import app
+from app.models.notebook import NotebookCell
 from app.models.session import UploadSession
+from tests.fakes import FakeExecutionBackend
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://datapilot:datapilot@localhost:5432/datapilot_test"
@@ -68,11 +71,18 @@ def _setup_database() -> Generator[None]:
 async def _clean_sessions_table() -> AsyncGenerator[None]:
     yield
     async with _TestSessionLocal() as session:
+        await session.execute(delete(NotebookCell))
         await session.execute(delete(UploadSession))
         await session.commit()
 
 
 async def _override_get_db() -> AsyncGenerator[AsyncSession]:
+    async with _TestSessionLocal() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession]:
     async with _TestSessionLocal() as session:
         yield session
 
@@ -83,12 +93,30 @@ def fake_storage() -> FakeStorageBackend:
 
 
 @pytest.fixture
-def client(fake_storage: FakeStorageBackend) -> Generator[TestClient]:
+def fake_execution_backend() -> FakeExecutionBackend:
+    return FakeExecutionBackend()
+
+
+@pytest.fixture
+def kernel_manager(fake_execution_backend: FakeExecutionBackend) -> KernelManager:
+    return KernelManager(
+        fake_execution_backend, idle_timeout_minutes=30, default_cell_timeout_seconds=30
+    )
+
+
+@pytest.fixture
+def client(
+    fake_storage: FakeStorageBackend,
+    fake_execution_backend: FakeExecutionBackend,
+    kernel_manager: KernelManager,
+) -> Generator[TestClient]:
     def _override_get_storage() -> StorageBackend:
         return fake_storage
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_storage_backend] = _override_get_storage
+    app.dependency_overrides[get_execution_backend] = lambda: fake_execution_backend
+    app.dependency_overrides[get_kernel_manager] = lambda: kernel_manager
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

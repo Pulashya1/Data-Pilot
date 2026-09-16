@@ -1,4 +1,11 @@
-import type { PreviewResponse, SessionDetail, SessionSummary } from "@/types";
+import type {
+  KernelStatusOut,
+  NotebookCell,
+  PreviewResponse,
+  SessionDetail,
+  SessionSummary,
+  TemplateInfo,
+} from "@/types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -70,4 +77,50 @@ export function getPreview(id: string, offset: number, limit: number): Promise<P
 
 export function deleteSession(id: string): Promise<void> {
   return request<void>(`/sessions/${id}`, { method: "DELETE" });
+}
+
+export function listTemplates(): Promise<TemplateInfo[]> {
+  return request<TemplateInfo[]>("/templates");
+}
+
+export function getNotebook(sessionId: string): Promise<NotebookCell[]> {
+  return request<NotebookCell[]>(`/sessions/${sessionId}/notebook`);
+}
+
+export function getKernelStatus(sessionId: string): Promise<KernelStatusOut> {
+  return request<KernelStatusOut>(`/sessions/${sessionId}/kernel/status`);
+}
+
+export function runTemplate(sessionId: string, templateKey: string): Promise<NotebookCell[]> {
+  return request<NotebookCell[]>(`/sessions/${sessionId}/templates/${templateKey}/run`, {
+    method: "POST",
+  });
+}
+
+export async function exportNotebook(sessionId: string, includeData: boolean): Promise<void> {
+  const res = await fetch(
+    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}`,
+    { method: "POST", cache: "no-store" },
+  );
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === "string" ? body.detail : (body.detail?.message ?? detail);
+    } catch {
+      // response body wasn't JSON; fall back to statusText
+    }
+    throw new ApiError(detail, res.status);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? "datapilot_export.zip";
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }

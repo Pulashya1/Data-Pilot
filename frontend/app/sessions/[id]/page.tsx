@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { ApiError, getSession, selectSheet } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { ApiError, getNotebook, getSession, selectSheet } from "@/lib/api";
+import { AnalysisActions } from "@/components/analysis-actions";
 import { ColumnStatsTable } from "@/components/column-stats-table";
 import { DataQualityScoreCard } from "@/components/data-quality-score";
+import { NotebookPanel } from "@/components/notebook-panel";
 import { PreviewTable } from "@/components/preview-table";
 import { formatBytes } from "@/lib/utils";
-import type { SessionDetail } from "@/types";
+import type { NotebookCell, SessionDetail } from "@/types";
 
 function SheetPicker({ session, onResolved }: { session: SessionDetail; onResolved: (s: SessionDetail) => void }) {
   const [selected, setSelected] = useState(session.sheet_names?.[0] ?? "");
@@ -58,6 +60,7 @@ function SheetPicker({ session, onResolved }: { session: SessionDetail; onResolv
 export default function SessionDetailPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const [session, setSession] = useState<SessionDetail | null>(null);
+  const [cells, setCells] = useState<NotebookCell[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,6 +68,17 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
       .then(setSession)
       .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Could not load session."));
   }, [id]);
+
+  const refreshNotebook = useCallback(() => {
+    getNotebook(id)
+      .then(setCells)
+      .catch(() => undefined);
+  }, [id]);
+
+  useEffect(() => {
+    if (session?.status !== "ready") return;
+    refreshNotebook();
+  }, [session?.status, refreshNotebook]);
 
   return (
     <main className="mx-auto max-w-4xl p-8">
@@ -113,6 +127,13 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
               <div>
                 <h2 className="mb-2 text-lg font-medium">Preview</h2>
                 <PreviewTable sessionId={session.id} columns={session.profile.columns.map((c) => c.name)} />
+              </div>
+
+              <AnalysisActions sessionId={session.id} onRunComplete={refreshNotebook} />
+
+              <div>
+                <h2 className="mb-2 text-lg font-medium">Notebook</h2>
+                <NotebookPanel cells={cells} />
               </div>
             </>
           )}

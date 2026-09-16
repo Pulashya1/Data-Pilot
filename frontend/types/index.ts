@@ -67,3 +67,54 @@ export interface PreviewResponse {
   limit: number;
   rows: PreviewRow[];
 }
+
+// Notebook & analysis templates (Phase 2, MASTER_PROMPT.md §6, §12)
+
+export type CellType = "markdown" | "code";
+export type CellStatus = "pending" | "success" | "error";
+
+export interface StreamOutput {
+  output_type: "stream";
+  name: "stdout" | "stderr";
+  text: string;
+}
+
+export interface DataOutput {
+  output_type: "execute_result" | "display_data";
+  data: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  execution_count?: number | null;
+}
+
+export interface ErrorOutput {
+  output_type: "error";
+  ename: string;
+  evalue: string;
+  traceback: string[];
+}
+
+export type CellOutput = StreamOutput | DataOutput | ErrorOutput;
+
+export interface NotebookCell {
+  id: string;
+  session_id: string;
+  position: number;
+  cell_type: CellType;
+  source: string;
+  label: string | null;
+  outputs: CellOutput[] | null;
+  execution_count: number | null;
+  status: CellStatus;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface TemplateInfo {
+  key: string;
+  title: string;
+  description: string;
+}
+
+export interface KernelStatusOut {
+  status: "stopped" | "running";
+}

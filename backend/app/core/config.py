@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     sample_row_threshold: int = 1_000_000
     sample_size: int = 100_000
 
+    # Sandboxed kernel execution (Phase 2)
+    kernel_image: str = "datapilot-kernel:latest"
+    kernel_relay_image: str = "datapilot-kernel-relay:latest"
+    kernel_network_internal: str = "datapilot-kernel-internal"
+    kernel_network_public: str = "datapilot-kernel-public"
+    kernel_memory_limit: str = "1g"
+    kernel_cpu_limit: float = 1.0
+    kernel_idle_timeout_minutes: int = 30
+    kernel_cell_timeout_seconds: int = 120
+    kernel_startup_timeout_seconds: int = 60
+
     # App
     env: str = "development"
     log_level: str = "INFO"
