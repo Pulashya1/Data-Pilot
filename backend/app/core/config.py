@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "datapilot-uploads"
+
+    # Uploads & profiling (Phase 1)
+    max_upload_size_mb: int = 200
+    preview_row_limit: int = 500
+    sample_row_threshold: int = 1_000_000
+    sample_size: int = 100_000
 
     # App
     env: str = "development"
