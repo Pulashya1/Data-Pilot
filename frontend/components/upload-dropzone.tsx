@@ -6,7 +6,16 @@ import { ApiError, selectSheet, uploadSession } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { SessionDetail } from "@/types";
 
-const ACCEPTED_EXTENSIONS = [".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson", ".parquet"];
+const ACCEPTED_EXTENSIONS = [
+  ".csv",
+  ".tsv",
+  ".xlsx",
+  ".xls",
+  ".json",
+  ".jsonl",
+  ".ndjson",
+  ".parquet",
+];
 
 function hasAcceptedExtension(filename: string): boolean {
   const lower = filename.toLowerCase();
@@ -72,7 +81,8 @@ export function UploadDropzone() {
       <div className="w-full max-w-lg rounded-lg border border-neutral-300 p-6 dark:border-neutral-700">
         <h2 className="mb-2 text-lg font-medium">Choose a sheet</h2>
         <p className="mb-4 text-sm text-neutral-500">
-          &quot;{pendingSheetSession.original_filename}&quot; has multiple sheets. Pick the one to analyze.
+          &quot;{pendingSheetSession.original_filename}&quot; has multiple sheets. Pick the one to
+          analyze.
         </p>
         <div className="mb-4 flex flex-col gap-2">
           {pendingSheetSession.sheet_names?.map((name) => (
@@ -129,7 +139,9 @@ export function UploadDropzone() {
             : "border-neutral-300 dark:border-neutral-700",
         )}
       >
-        <p className="font-medium">{isUploading ? "Uploading…" : "Drag & drop a dataset, or click to browse"}</p>
+        <p className="font-medium">
+          {isUploading ? "Uploading…" : "Drag & drop a dataset, or click to browse"}
+        </p>
         <p className="text-sm text-neutral-500">CSV, TSV, Excel, JSON, or Parquet — up to 200 MB</p>
         <input
           ref={inputRef}

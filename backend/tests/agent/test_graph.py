@@ -1,0 +1,270 @@
+"""End-to-end LangGraph agent run tests (MASTER_PROMPT.md §5.1, §12 Phase 3/4).
+
+Runs the full ingest -> understand -> plan -> execute_step -> summarize graph through the API,
+with `LLM_MODEL=mock` (the test-suite default, from `Settings`) and `FakeExecutionBackend` (no
+Docker). Nothing here overrides `llm_model`, so this also guards CI's "never call a real LLM"
+invariant.
+
+Phase 4 changed the default: a session now *pauses* (`agent_status=waiting_decision`) at the
+target-confirmation and plan-approval decision points unless `auto_decide` is turned on for that
+session (`POST /sessions/{id}/settings`). Tests that want the old full-auto-run behavior enable
+it explicitly; the rest exercise the real pause/answer/resume flow.
+"""
+
+import io
+import time
+from typing import Any
+
+import pandas as pd
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.decision import Decision
+
+SAMPLE_DF = pd.DataFrame(
+    {
+        "id": range(1, 41),
+        "age": [20 + (i % 40) for i in range(40)],
+        "income": [30_000 + 500 * i for i in range(40)],
+        "churned": [i % 3 == 0 for i in range(40)],
+    }
+)
+
+
+def _upload(client: TestClient) -> str:
+    csv_bytes = SAMPLE_DF.to_csv(index=False).encode()
+    response = client.post(
+        "/sessions", files={"file": ("customers.csv", io.BytesIO(csv_bytes), "text/csv")}
+    )
+    assert response.status_code == 201
+    return response.json()["id"]  # type: ignore[no-any-return]
+
+
+def _upload_with_auto_decide(client: TestClient) -> str:
+    session_id = _upload(client)
+    response = client.post(f"/sessions/{session_id}/settings", json={"auto_decide": True})
+    assert response.status_code == 200
+    assert response.json()["auto_decide"] is True
+    return session_id
+
+
+def _wait_for_status(
+    client: TestClient, session_id: str, statuses: tuple[str, ...], timeout: float = 20.0
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        session = client.get(f"/sessions/{session_id}").json()
+        if session["agent_status"] in statuses:
+            return session  # type: ignore[no-any-return]
+        time.sleep(0.05)
+    raise AssertionError(f"agent did not reach {statuses} in time")
+
+
+def _wait_for_agent(client: TestClient, session_id: str, timeout: float = 20.0) -> dict[str, Any]:
+    return _wait_for_status(client, session_id, ("done", "error"), timeout=timeout)
+
+
+def _pending_decision(client: TestClient, session_id: str, kind: str) -> dict[str, Any]:
+    decisions = client.get(f"/sessions/{session_id}/decisions").json()
+    matches = [d for d in decisions if d["kind"] == kind and d["selected_option"] is None]
+    assert matches, f"no pending {kind} decision; got {decisions}"
+    return matches[0]
+
+
+def test_agent_runs_end_to_end_and_picks_a_target(client: TestClient) -> None:
+    session_id = _upload_with_auto_decide(client)
+
+    start = client.post(f"/sessions/{session_id}/agent/start")
+    assert start.status_code == 202
+
+    session = _wait_for_agent(client, session_id)
+    assert session["agent_status"] == "done", session.get("agent_error_message")
+    assert session["target_column"] == "churned"
+    assert session["problem_type"] == "binary_classification"
+    assert session["plan_steps"]
+
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = [c["label"] for c in notebook if c["cell_type"] == "code"]
+    assert "Imports" in labels
+    assert any(label == "Missing values" for label in labels)
+
+    markdown_sources = [c["source"] for c in notebook if c["cell_type"] == "markdown"]
+    assert any(s.startswith("## Problem type & target") for s in markdown_sources)
+    assert any(s.startswith("## Summary") for s in markdown_sources)
+
+
+async def test_agent_run_records_decisions(client: TestClient, db_session: AsyncSession) -> None:
+    session_id = _upload_with_auto_decide(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_agent(client, session_id)
+
+    result = await db_session.execute(select(Decision).where(Decision.session_id == session_id))
+    decisions = result.scalars().all()
+    kinds = {d.kind.value for d in decisions}
+    assert kinds == {"target_confirmation", "plan_approval"}
+    assert all(d.auto_decided for d in decisions)
+
+
+def test_cannot_start_agent_twice_while_running(client: TestClient) -> None:
+    session_id = _upload_with_auto_decide(client)
+    first = client.post(f"/sessions/{session_id}/agent/start")
+    assert first.status_code == 202
+    second = client.post(f"/sessions/{session_id}/agent/start")
+    assert second.status_code == 409
+    _wait_for_agent(client, session_id)
+
+
+def test_start_agent_on_unknown_session_404(client: TestClient) -> None:
+    response = client.post("/sessions/does-not-exist/agent/start")
+    assert response.status_code == 404
+
+
+def test_usage_reports_zero_real_calls_in_mock_mode(client: TestClient) -> None:
+    session_id = _upload_with_auto_decide(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_agent(client, session_id)
+
+    usage = client.get(f"/sessions/{session_id}/usage").json()
+    assert usage["calls_used"] == 0
+
+
+def test_agent_pauses_for_target_confirmation_by_default(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+
+    session = _wait_for_status(client, session_id, ("waiting_decision", "error"))
+    assert session["agent_status"] == "waiting_decision", session.get("agent_error_message")
+    assert session["target_column"] is None
+
+    decision = _pending_decision(client, session_id, "target_confirmation")
+    assert decision["recommended_option"] == "churned"
+    assert "churned" in decision["options"]
+    assert "(no target)" in decision["options"]
+
+
+def test_answering_target_confirmation_resumes_to_plan_approval(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+
+    decision = _pending_decision(client, session_id, "target_confirmation")
+    answer = client.post(
+        f"/sessions/{session_id}/decisions/{decision['id']}",
+        json={"selected_option": "churned"},
+    )
+    assert answer.status_code == 200
+    assert answer.json()["selected_option"] == "churned"
+
+    session = _wait_for_status(client, session_id, ("waiting_decision", "error"))
+    assert session["agent_status"] == "waiting_decision", session.get("agent_error_message")
+    assert session["target_column"] == "churned"
+    assert session["problem_type"] == "binary_classification"
+
+    plan_decision = _pending_decision(client, session_id, "plan_approval")
+    assert "missing_values" in plan_decision["options"]
+
+
+def test_overriding_target_recomputes_problem_type_without_a_second_llm_call(
+    client: TestClient,
+) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    decision = _pending_decision(client, session_id, "target_confirmation")
+
+    answer = client.post(
+        f"/sessions/{session_id}/decisions/{decision['id']}",
+        json={"selected_option": "(no target)"},
+    )
+    assert answer.status_code == 200
+
+    session = _wait_for_status(client, session_id, ("waiting_decision", "error"))
+    assert session["target_column"] is None
+    assert session["problem_type"] is None
+    assert client.get(f"/sessions/{session_id}/usage").json()["calls_used"] == 0
+
+
+def test_rejecting_an_unknown_target_answer_400s(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    decision = _pending_decision(client, session_id, "target_confirmation")
+
+    response = client.post(
+        f"/sessions/{session_id}/decisions/{decision['id']}",
+        json={"selected_option": "not_a_real_column"},
+    )
+    assert response.status_code == 400
+
+
+def test_editing_the_plan_drops_and_reorders_steps(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    target_decision = _pending_decision(client, session_id, "target_confirmation")
+    client.post(
+        f"/sessions/{session_id}/decisions/{target_decision['id']}",
+        json={"selected_option": "churned"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+
+    edited = client.post(
+        f"/sessions/{session_id}/plan", json={"steps": ["correlations", "duplicates"]}
+    )
+    assert edited.status_code == 200
+    assert edited.json()["selected_option"] == "correlations,duplicates"
+
+    session = _wait_for_agent(client, session_id)
+    assert session["agent_status"] == "done", session.get("agent_error_message")
+    assert session["plan_steps"] == ["correlations", "duplicates"]
+
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = {c["label"] for c in notebook if c["cell_type"] == "code"}
+    assert "Missing values" not in labels
+    assert "Correlations & multicollinearity" in labels
+
+
+def test_plan_edit_with_unknown_step_400s(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    target_decision = _pending_decision(client, session_id, "target_confirmation")
+    client.post(
+        f"/sessions/{session_id}/decisions/{target_decision['id']}",
+        json={"selected_option": "churned"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+
+    response = client.post(f"/sessions/{session_id}/plan", json={"steps": ["not_a_template"]})
+    assert response.status_code == 400
+
+
+def test_decisions_panel_lists_answered_and_pending(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+
+    decisions = client.get(f"/sessions/{session_id}/decisions").json()
+    assert len(decisions) == 1
+    assert decisions[0]["selected_option"] is None
+    assert decisions[0]["auto_decided"] is False
+
+
+def test_double_answering_a_decision_409s(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    decision = _pending_decision(client, session_id, "target_confirmation")
+
+    first = client.post(
+        f"/sessions/{session_id}/decisions/{decision['id']}",
+        json={"selected_option": "churned"},
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/sessions/{session_id}/decisions/{decision['id']}",
+        json={"selected_option": "age"},
+    )
+    assert second.status_code == 409

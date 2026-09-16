@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     llm_tpm_limit: int = 200_000
     llm_cache_ttl_seconds: int = 86_400
     llm_sample_rows: int = 20
+    # Internal tuning knobs (not in .env.example — sane defaults, override only if needed).
+    llm_retry_max_attempts: int = 3
+    llm_retry_base_delay_seconds: float = 1.0
 
     # Infra
     database_url: str = "postgresql+asyncpg://datapilot:datapilot@localhost:5432/datapilot"

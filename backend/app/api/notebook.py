@@ -1,33 +1,32 @@
-"""Notebook, template, and kernel endpoints (MASTER_PROMPT.md §8, §12 Phase 2).
+"""Notebook, template, and kernel endpoints (MASTER_PROMPT.md §8, §12 Phase 2/4).
 
 No LLM involved: templates are rendered deterministically (app/analysis/templates) and run
-in the session's sandboxed kernel (app/execution). The agent (Phase 3+) will drive these
-same building blocks instead of explicit UI buttons.
+in the session's sandboxed kernel (app/execution). The agent (Phase 3+) drives these same
+building blocks instead of explicit UI buttons.
 """
 
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.templates.base import extract_summary
 from app.analysis.templates.registry import TEMPLATES
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.storage import StorageBackend, get_storage_backend
-from app.execution.backend import ExecutionBackend, KernelHandle, KernelStartupError
+from app.execution.backend import ExecutionBackend, KernelStartupError
 from app.execution.kernel_manager import (
     KernelManager,
-    OnStartHook,
     get_execution_backend,
     get_kernel_manager,
 )
-from app.models.notebook import CellStatus, CellType, NotebookCell
-from app.models.session import SessionStatus, UploadSession
+from app.models.notebook import CellType, NotebookCell
+from app.models.session import AgentStatus, SessionStatus, UploadSession
 from app.notebook import builder
 from app.notebook.export import build_export_zip, read_kernel_requirements
-from app.schemas.dataset import DatasetProfile
+from app.notebook.seed import render_and_run_template_step, run_pending_seed_cells
 from app.schemas.notebook import KernelStatusOut, NotebookCellOut, TemplateInfo
 
 router = APIRouter(tags=["notebook"])
@@ -40,47 +39,6 @@ async def _get_ready_session_or_404(session_id: str, db: AsyncSession) -> Upload
     if session.status != SessionStatus.READY or session.profile is None:
         raise HTTPException(status_code=409, detail="Session is not ready for analysis")
     return session
-
-
-def _make_on_start_hook(
-    session: UploadSession,
-    db: AsyncSession,
-    storage: StorageBackend,
-    backend: ExecutionBackend,
-    settings: Settings,
-) -> OnStartHook:
-    async def on_start(handle: KernelHandle) -> None:
-        raw = storage.download(session.storage_key)
-        await backend.write_file(handle, f"data/{session.original_filename}", raw)
-        cells = await builder.get_cells(db, session.id)
-        for cell in cells:
-            if cell.cell_type == CellType.CODE and cell.status == CellStatus.SUCCESS:
-                await backend.execute(
-                    handle, cell.source, timeout=settings.kernel_cell_timeout_seconds
-                )
-
-    return on_start
-
-
-async def _run_pending_seed_cells(
-    session: UploadSession,
-    db: AsyncSession,
-    storage: StorageBackend,
-    backend: ExecutionBackend,
-    kernel_manager: KernelManager,
-    settings: Settings,
-) -> None:
-    """Run any not-yet-executed seed cells (imports/config/data load) before new work."""
-    on_start: OnStartHook | None = _make_on_start_hook(session, db, storage, backend, settings)
-    cells = await builder.get_cells(db, session.id)
-    for cell in cells:
-        if cell.cell_type != CellType.CODE or cell.status != CellStatus.PENDING:
-            continue
-        result = await kernel_manager.run_cell(session.id, cell.source, on_start=on_start)
-        on_start = None  # only needed once, to seed a brand-new kernel
-        extract_summary(result)
-        builder.apply_execution_result(cell, result)
-        await db.flush()
 
 
 @router.get("/templates", response_model=list[TemplateInfo])
@@ -96,6 +54,42 @@ async def get_notebook(
     session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> list[NotebookCell]:
     await _get_ready_session_or_404(session_id, db)
+    return await builder.get_cells(db, session_id)
+
+
+@router.post(
+    "/sessions/{session_id}/cells/{cell_id}/revert",
+    response_model=list[NotebookCellOut],
+)
+async def revert_to_cell(
+    session_id: str,
+    cell_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    kernel_manager: Annotated[KernelManager, Depends(get_kernel_manager)],
+) -> list[NotebookCell]:
+    """MASTER_PROMPT.md §5.2 `revert_to_cell`/§7 "Revert to here": truncates the notebook after
+    `cell_id` and shuts the kernel down so the *next* execution rebuilds it from the remaining
+    cells (`app.notebook.seed.make_on_start_hook` replays every successful cell on kernel
+    start). Only usable between agent runs — reverting mid-run would race the agent's own
+    writes to the notebook and the kernel it's actively using."""
+    session = await _get_ready_session_or_404(session_id, db)
+    if session.agent_status in (AgentStatus.RUNNING, AgentStatus.WAITING_DECISION):
+        raise HTTPException(
+            status_code=409,
+            detail="Can't revert while the agent is running or awaiting a decision.",
+        )
+
+    target = await db.get(NotebookCell, cell_id)
+    if target is None or target.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Notebook cell not found")
+
+    await db.execute(
+        delete(NotebookCell).where(
+            NotebookCell.session_id == session_id, NotebookCell.position > target.position
+        )
+    )
+    await kernel_manager.shutdown_session(session_id)
+    await db.commit()
     return await builder.get_cells(db, session_id)
 
 
@@ -127,37 +121,18 @@ async def run_template(
     if template is None:
         raise HTTPException(status_code=404, detail=f"Unknown template '{template_key}'")
 
-    profile = DatasetProfile.model_validate(session.profile)
     await builder.seed_notebook(db, session)
     await db.flush()
 
     try:
-        await _run_pending_seed_cells(session, db, storage, backend, kernel_manager, settings)
+        await run_pending_seed_cells(session, db, storage, backend, kernel_manager, settings)
+        new_cells, _summary = await render_and_run_template_step(
+            db, session, storage, backend, kernel_manager, settings, template
+        )
     except KernelStartupError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    code = template.render(template.default_params(profile))
-    cell = await builder.add_code_cell(db, session.id, code, label=template.title)
-    await db.flush()
-
-    on_start = _make_on_start_hook(session, db, storage, backend, settings)
-    try:
-        result = await kernel_manager.run_cell(session.id, code, on_start=on_start)
-    except KernelStartupError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    summary = extract_summary(result)
-    builder.apply_execution_result(cell, result)
     await db.commit()
-
-    new_cells: list[NotebookCell] = [cell]
-    if summary is not None:
-        insights = template.summarize(summary)
-        if insights:
-            markdown = "**Insights:**\n\n" + "\n".join(f"- {line}" for line in insights)
-            insight_cell = await builder.add_markdown_cell(db, session.id, markdown)
-            await db.commit()
-            new_cells.append(insight_cell)
     return new_cells
 
 

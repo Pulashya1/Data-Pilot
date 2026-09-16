@@ -55,6 +55,15 @@ export interface SessionDetail extends SessionSummary {
   selected_sheet: string | null;
   error_message: string | null;
   profile: DatasetProfile | null;
+
+  // Agent state (Phase 3, MASTER_PROMPT.md §12)
+  problem_type: ProblemType | null;
+  target_column: string | null;
+  agent_status: AgentStatus;
+  agent_error_message: string | null;
+  plan_steps: string[] | null;
+  llm_calls_used: number;
+  auto_decide: boolean;
 }
 
 export interface PreviewRow {
@@ -117,4 +126,102 @@ export interface TemplateInfo {
 
 export interface KernelStatusOut {
   status: "stopped" | "running";
+}
+
+// Agent run (Phase 3, MASTER_PROMPT.md §5, §7, §8, §12)
+
+export type ProblemType =
+  | "regression"
+  | "binary_classification"
+  | "multiclass_classification"
+  | "clustering"
+  | "time_series";
+
+export type AgentStatus = "not_started" | "running" | "waiting_decision" | "done" | "error";
+
+export type InsightSeverity = "info" | "warning" | "critical";
+
+export interface CellUpdateEvent {
+  type: "cell_update";
+  cell_id: string;
+  status: CellStatus;
+  label: string | null;
+}
+
+export interface InsightEvent {
+  type: "insight";
+  text: string;
+  severity: InsightSeverity;
+  related_cell_id: string | null;
+}
+
+export interface PlanUpdateEvent {
+  type: "plan_update";
+  steps: string[];
+  step_index: number;
+}
+
+export interface DecisionEvent {
+  type: "decision";
+  id: string;
+  kind: string;
+  question: string;
+  options: string[];
+  recommended_option: string | null;
+  selected_option: string | null;
+  reasoning: string | null;
+  auto_decided: boolean;
+}
+
+export interface LLMStatusEvent {
+  type: "llm_status";
+  state: "idle" | "calling" | "waiting_for_capacity" | "error";
+  model: string;
+  calls_used: number;
+  calls_budget: number;
+}
+
+export interface AgentStatusEvent {
+  type: "agent_status";
+  status: "running" | "waiting_decision" | "done" | "error";
+  error_message: string | null;
+}
+
+export interface ErrorEvent {
+  type: "error";
+  message: string;
+  cell_id: string | null;
+}
+
+export type AgentEvent =
+  | CellUpdateEvent
+  | InsightEvent
+  | PlanUpdateEvent
+  | DecisionEvent
+  | LLMStatusEvent
+  | AgentStatusEvent
+  | ErrorEvent;
+
+export interface UsageOut {
+  calls_used: number;
+  calls_budget: number;
+  tokens_used: number;
+  models_used: string[];
+}
+
+// Human-in-the-loop decisions (Phase 4, MASTER_PROMPT.md §5.4, §8, §12)
+
+export type DecisionKind = "target_confirmation" | "plan_approval";
+
+export interface DecisionOut {
+  id: string;
+  kind: DecisionKind;
+  question: string;
+  options: string[];
+  recommended_option: string | null;
+  selected_option: string | null;
+  reasoning: string | null;
+  auto_decided: boolean;
+  allow_free_text: boolean;
+  created_at: string;
 }

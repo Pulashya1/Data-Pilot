@@ -26,7 +26,9 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
         setRows(res.rows);
         setTotalAvailable(res.total_available);
       })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Could not load preview."));
+      .catch((err: unknown) =>
+        setError(err instanceof ApiError ? err.message : "Could not load preview."),
+      );
   }, [sessionId]);
 
   const { startIndex, visibleRows, topPad, bottomPad } = useMemo(() => {
@@ -42,7 +44,8 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
   }, [rows, scrollTop]);
 
   if (error) return <p className="text-sm text-red-500">{error}</p>;
-  if (rows.length === 0) return <p className="text-sm text-neutral-500">No preview rows available.</p>;
+  if (rows.length === 0)
+    return <p className="text-sm text-neutral-500">No preview rows available.</p>;
 
   return (
     <div>
@@ -94,7 +97,8 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
         </table>
       </div>
       <p className="mt-1 text-xs text-neutral-500">
-        Showing {rows.length.toLocaleString()} of {totalAvailable.toLocaleString()} cached preview rows.
+        Showing {rows.length.toLocaleString()} of {totalAvailable.toLocaleString()} cached preview
+        rows.
       </p>
     </div>
   );

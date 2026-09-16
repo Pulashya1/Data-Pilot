@@ -111,3 +111,29 @@ class FakeExecutionBackend:
     def kill_session(self, session_id: str) -> None:
         """Test helper: simulate a crashed kernel without going through shutdown()."""
         self.alive[session_id] = False
+
+
+class FakeRedis:
+    """In-memory stand-in for `app.core.redis.RedisLike`, used by LLM client tests so they
+    don't need a real Redis server. TTLs are tracked but not actively expired — tests that
+    care about expiry check `expire_seconds` directly instead of sleeping."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expire_seconds: dict[str, int] = {}
+
+    async def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    async def set(self, name: str, value: str, ex: int | None = None) -> None:
+        self.values[name] = value
+        if ex is not None:
+            self.expire_seconds[name] = ex
+
+    async def incrby(self, name: str, amount: int = 1) -> int:
+        current = int(self.values.get(name) or 0) + amount
+        self.values[name] = str(current)
+        return current
+
+    async def expire(self, name: str, seconds: int) -> None:
+        self.expire_seconds[name] = seconds

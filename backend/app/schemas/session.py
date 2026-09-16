@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.models.session import FileType, SessionStatus
+from app.models.session import AgentStatus, FileType, ProblemType, SessionStatus
 from app.schemas.dataset import DatasetProfile
 
 
@@ -28,9 +28,29 @@ class SessionDetail(SessionSummary):
     error_message: str | None
     profile: DatasetProfile | None
 
+    # Agent state (Phase 3)
+    problem_type: ProblemType | None
+    target_column: str | None
+    agent_status: AgentStatus
+    agent_error_message: str | None
+    plan_steps: list[str] | None
+    llm_calls_used: int
+    auto_decide: bool
+
 
 class SheetSelectionRequest(BaseModel):
     sheet_name: str
+
+
+class SessionSettingsRequest(BaseModel):
+    auto_decide: bool
+
+
+class UsageOut(BaseModel):
+    calls_used: int
+    calls_budget: int
+    tokens_used: int
+    models_used: list[str]
 
 
 class PreviewResponse(BaseModel):

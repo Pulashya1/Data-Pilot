@@ -12,7 +12,9 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
 
 ### Backend (from `backend/`)
 - Install: `pip install -e ".[dev]"`
-- Run dev server: `uvicorn app.main:app --reload`
+- Run dev server: `uvicorn app.main:app --reload` (on Windows, use `python -m app` instead —
+  same server, but sets the event loop policy before uvicorn creates its loop, which
+  `psycopg`/the LangGraph checkpointer needs; see `app/__main__.py`)
 - Apply migrations: `alembic upgrade head`
 - Create a migration after changing models: `alembic revision --autogenerate -m "..."`
 - Test: `pytest` (needs a reachable Postgres; point `TEST_DATABASE_URL` at it, defaults to `localhost:5432/datapilot_test`) and MinIO on `localhost:9000` for `tests/test_storage.py`
@@ -24,6 +26,8 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
   `docker build -t datapilot-kernel-relay:latest relay_image/`
 - Docker-backed kernel integration tests (excluded from the default `pytest` run — see below):
   `pytest -m docker`
+- Verify a real LLM key + tool calling works (`LLM_MODEL`/`GEMINI_API_KEY` etc. set in `.env`,
+  needs Postgres reachable; no-ops if `LLM_MODEL=mock`): `python scripts/verify_llm.py`
 
 ### Frontend (from `frontend/`)
 - Install: `npm install`
@@ -73,6 +77,72 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
   `pytest` run (build the images first, then `pytest -m docker`); CI builds them in a separate
   `kernel` job.
 
+## LLM agent (Phase 3)
+- `app/agent/llm.py::LLMClient` is the only thing that calls `litellm` or knows a model name
+  (see the stack rule above). `LLM_MODEL=mock` short-circuits everything before any network/
+  Redis/budget cost, via a deterministic heuristic (`app/agent/heuristics.py`) shared with the
+  real-LLM graceful-degradation fallback in `understand_node`.
+- Only two places ever make a real LLM call: `understand_node` (one-shot target/problem-type
+  proposal) and the `execute_step` error-repair loop (max 3 attempts). Planning, running
+  templates, and the final summary are all deterministic — no LLM call, per §5.5/§5.8 cost
+  minimization.
+- The graph (`app/agent/graph.py`, nodes in `app/agent/nodes.py`) runs `ingest -> understand ->
+  plan -> execute_step (loop) -> summarize` end to end automatically, with no pausing — §5.1's
+  `interrupt()`-based pauses land in Phase 4 per the §12 phase split. `understand`/`plan` still
+  record their choice as a `Decision` row (`app/models/decision.py`) so Phase 4 can build real
+  pausing/editing against data that already exists.
+- Per-run state that can't go through LangGraph's checkpointed state (DB session, kernel
+  manager, LLM client, event bus) is looked up by `session_id` from `app/agent/deps.py` instead;
+  `app/agent/state.py`'s `AgentState` stays small and JSON-serializable.
+- Progress streams over SSE (`GET /sessions/{id}/stream`) from an in-process
+  `app/agent/events.py::SessionEventBus`, as typed events (`app/schemas/events.py`).
+- **`.env` loading gotcha**: `Settings.model_config`'s `env_file=".env"` resolves relative to
+  the process's *current working directory*, not the repo root or `backend/`. `docker compose
+  up` picks up the root `.env` automatically (the `backend` service sets `env_file: - .env` in
+  `docker-compose.yml`); running the backend locally from `backend/` will **not** find a
+  root-level `.env` — copy/symlink it to `backend/.env`, run from the repo root, or export the
+  vars yourself.
+- Verify a real key actually works before relying on it: `python scripts/verify_llm.py` (needs
+  Postgres reachable; no-ops under `LLM_MODEL=mock`).
+- LangGraph checkpoints to Postgres (`app/agent/checkpoint.py`, `AsyncPostgresSaver`), started
+  and stopped once in `app/main.py`'s lifespan. This is also why Windows needs `python -m app`
+  instead of a bare `uvicorn app.main:app` — see the "Run dev server" command above.
+- Tests: `tests/test_llm_client.py` (mock mode, retry/fallback/cache/budget, using
+  `tests/fakes.py::FakeRedis`), `tests/agent/test_graph.py` (a full graph run through the API
+  with `FakeExecutionBackend`), `tests/test_agent_api.py` (start/stream/usage endpoints).
+
+## Human-in-the-loop (Phase 4)
+- `app/agent/decisions.py` is the shared `ask_user`-style primitive: a node creates a `Decision`
+  row, then calls `resolve_decision`, which pauses the graph via LangGraph's `interrupt()`
+  unless `UploadSession.auto_decide` is on (default off — sessions pause by default; the
+  "Let the agent decide" toggle is `POST /sessions/{id}/settings`). `understand_node` and
+  `plan_node` (`app/agent/nodes.py`) both use it for the target-confirmation and plan-approval
+  decision points; Phase 5/6's data-changing decisions (drop columns, imputation, encoding,
+  etc.) should reuse the same primitive rather than re-implementing pausing.
+- **Replay safety, read this before touching a node that can pause**: LangGraph reruns a
+  paused node's entire function body from the top on resume, not just the code after
+  `interrupt()`. Any one-time side effect (an LLM call, creating the `Decision` row, writing a
+  markdown cell) must be guarded by "does a `Decision` of this kind already exist for this
+  session?" — see the module docstring in `app/agent/decisions.py` for the full mechanics and
+  why `resolve_decision` itself is safe to call unconditionally on every replay.
+- `AgentStatus.WAITING_DECISION` is a real, persisted status (not just an SSE event) — the
+  `GET /sessions/{id}/stream` SSE connection closes on it the same way it does on `done`/`error`;
+  the frontend reopens a new stream after answering (`answerDecision` in `frontend/lib/api.ts`).
+- API: `GET/POST /sessions/{id}/decisions[/{decision_id}]` (Decisions panel + answer an
+  interrupt), `POST /sessions/{id}/plan` (structured plan editing — same underlying
+  answer-and-resume path, just a `{steps: [...]}` body instead of a csv string),
+  `POST /sessions/{id}/cells/{cell_id}/revert` (truncates the notebook after that cell and
+  shuts the kernel down so the next run rebuilds it from the remaining cells).
+- Overriding the confirmed target column does **not** trigger a second LLM call: problem type
+  is derived deterministically from the chosen column's stats either way
+  (`heuristics.classify_single_column`), which is also why the Decisions panel always credits
+  target-confirmation's *reasoning* to the LLM's original proposal even when the user picked a
+  different column.
+- Tests: `tests/agent/test_graph.py` covers pause/answer/resume, target override, plan editing,
+  and rejection cases; `tests/test_notebook_api.py` covers revert. Phase 3's original
+  full-auto-run tests now call `POST /sessions/{id}/settings {"auto_decide": true}` first, since
+  auto-decide is no longer the default.
+
 ## Build phases
-Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 2 (sandboxed execution + notebook)**
-complete, awaiting review before Phase 3.
+Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)** and
+**Phase 4 (human-in-the-loop)** complete and passing tests, awaiting review before Phase 5.

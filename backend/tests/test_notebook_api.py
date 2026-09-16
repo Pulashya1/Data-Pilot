@@ -110,3 +110,46 @@ def test_export_with_include_data_bundles_the_dataset(client: TestClient) -> Non
     assert response.status_code == 200
     with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
         assert "data/data.csv" in zf.namelist()
+
+
+def test_revert_to_cell_truncates_notebook_and_stops_the_kernel(
+    client: TestClient, kernel_manager: KernelManager
+) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/templates/overview/run")
+    client.post(f"/sessions/{session_id}/templates/duplicates/run")
+    assert client.get(f"/sessions/{session_id}/kernel/status").json()["status"] == "running"
+
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    load_data_cell = next(c for c in notebook if c["label"] == "Load data")
+
+    response = client.post(f"/sessions/{session_id}/cells/{load_data_cell['id']}/revert")
+    assert response.status_code == 200
+    remaining = response.json()
+    assert [c["id"] for c in remaining] == [
+        c["id"] for c in notebook if c["position"] <= load_data_cell["position"]
+    ]
+
+    assert client.get(f"/sessions/{session_id}/kernel/status").json()["status"] == "stopped"
+
+    notebook_after = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = [c["label"] for c in notebook_after if c["cell_type"] == "code"]
+    assert labels == ["Imports", "Configuration", "Load data"]
+
+
+def test_revert_to_unknown_cell_404(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/templates/overview/run")
+    response = client.post(f"/sessions/{session_id}/cells/does-not-exist/revert")
+    assert response.status_code == 404
+
+
+def test_revert_while_agent_running_409s(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/templates/overview/run")
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    cell_id = notebook[0]["id"]
+
+    client.post(f"/sessions/{session_id}/agent/start")
+    response = client.post(f"/sessions/{session_id}/cells/{cell_id}/revert")
+    assert response.status_code == 409

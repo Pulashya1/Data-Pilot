@@ -1,10 +1,13 @@
 import type {
+  AgentEvent,
+  DecisionOut,
   KernelStatusOut,
   NotebookCell,
   PreviewResponse,
   SessionDetail,
   SessionSummary,
   TemplateInfo,
+  UsageOut,
 } from "@/types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -95,6 +98,68 @@ export function runTemplate(sessionId: string, templateKey: string): Promise<Not
   return request<NotebookCell[]>(`/sessions/${sessionId}/templates/${templateKey}/run`, {
     method: "POST",
   });
+}
+
+export async function startAgent(sessionId: string): Promise<void> {
+  await request(`/sessions/${sessionId}/agent/start`, { method: "POST" });
+}
+
+export function getUsage(sessionId: string): Promise<UsageOut> {
+  return request<UsageOut>(`/sessions/${sessionId}/usage`);
+}
+
+export function getDecisions(sessionId: string): Promise<DecisionOut[]> {
+  return request<DecisionOut[]>(`/sessions/${sessionId}/decisions`);
+}
+
+export function answerDecision(
+  sessionId: string,
+  decisionId: string,
+  selectedOption: string,
+): Promise<DecisionOut> {
+  return request<DecisionOut>(`/sessions/${sessionId}/decisions/${decisionId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selected_option: selectedOption }),
+  });
+}
+
+export function editPlan(sessionId: string, steps: string[]): Promise<DecisionOut> {
+  return request<DecisionOut>(`/sessions/${sessionId}/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ steps }),
+  });
+}
+
+export function setAutoDecide(sessionId: string, autoDecide: boolean): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/${sessionId}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_decide: autoDecide }),
+  });
+}
+
+export function revertToCell(sessionId: string, cellId: string): Promise<NotebookCell[]> {
+  return request<NotebookCell[]>(`/sessions/${sessionId}/cells/${cellId}/revert`, {
+    method: "POST",
+  });
+}
+
+/** Opens the agent's SSE stream (MASTER_PROMPT.md §7, §8) and returns an unsubscribe function. */
+export function subscribeToAgentStream(
+  sessionId: string,
+  onEvent: (event: AgentEvent) => void,
+): () => void {
+  const source = new EventSource(`${API_BASE_URL}/sessions/${sessionId}/stream`);
+  source.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as AgentEvent);
+    } catch {
+      // ignore malformed/keep-alive frames
+    }
+  };
+  return () => source.close();
 }
 
 export async function exportNotebook(sessionId: string, includeData: boolean): Promise<void> {

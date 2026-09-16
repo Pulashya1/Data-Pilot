@@ -25,11 +25,13 @@ export function ColumnStatsTable({ columns }: { columns: ColumnProfile[] }) {
               <td className="px-3 py-1.5 text-neutral-500">
                 {col.numeric_stats ? (
                   <span>
-                    mean {col.numeric_stats.mean?.toFixed(2)} · min {col.numeric_stats.min?.toFixed(2)} ·
-                    max {col.numeric_stats.max?.toFixed(2)}
+                    mean {col.numeric_stats.mean?.toFixed(2)} · min{" "}
+                    {col.numeric_stats.min?.toFixed(2)} · max {col.numeric_stats.max?.toFixed(2)}
                   </span>
                 ) : col.top_values && col.top_values.length > 0 ? (
-                  <span>top: {col.top_values.map((tv) => `${tv.value} (${tv.count})`).join(", ")}</span>
+                  <span>
+                    top: {col.top_values.map((tv) => `${tv.value} (${tv.count})`).join(", ")}
+                  </span>
                 ) : (
                   "—"
                 )}

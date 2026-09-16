@@ -70,7 +70,15 @@ function OutputView({ output }: { output: CellOutput }) {
   return null;
 }
 
-function CellCard({ cell }: { cell: NotebookCell }) {
+function CellCard({
+  cell,
+  onRevert,
+  reverting,
+}: {
+  cell: NotebookCell;
+  onRevert?: (cellId: string) => void;
+  reverting: boolean;
+}) {
   if (cell.cell_type === "markdown") {
     return (
       <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
@@ -83,14 +91,26 @@ function CellCard({ cell }: { cell: NotebookCell }) {
     <div className="rounded-lg border border-neutral-200 dark:border-neutral-800">
       <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-1.5 dark:border-neutral-800">
         <span className="text-xs font-medium text-neutral-500">{cell.label ?? "Code"}</span>
-        <span
-          className={cn(
-            "rounded-full px-2 py-0.5 text-[10px] font-medium uppercase",
-            STATUS_STYLES[cell.status],
+        <div className="flex items-center gap-2">
+          {onRevert && (
+            <button
+              type="button"
+              disabled={reverting}
+              onClick={() => onRevert(cell.id)}
+              className="text-[10px] font-medium text-neutral-500 underline disabled:opacity-50 hover:text-neutral-900 dark:hover:text-neutral-100"
+            >
+              Revert to here
+            </button>
           )}
-        >
-          {cell.status}
-        </span>
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-[10px] font-medium uppercase",
+              STATUS_STYLES[cell.status],
+            )}
+          >
+            {cell.status}
+          </span>
+        </div>
       </div>
       <pre className="overflow-x-auto px-3 py-2 text-xs text-neutral-800 dark:text-neutral-200">
         <code>{cell.source}</code>
@@ -112,7 +132,15 @@ function CellCard({ cell }: { cell: NotebookCell }) {
   );
 }
 
-export function NotebookPanel({ cells }: { cells: NotebookCell[] }) {
+export function NotebookPanel({
+  cells,
+  onRevert,
+  reverting = false,
+}: {
+  cells: NotebookCell[];
+  onRevert?: (cellId: string) => void;
+  reverting?: boolean;
+}) {
   if (cells.length === 0) {
     return (
       <p className="text-sm text-neutral-500">
@@ -123,7 +151,7 @@ export function NotebookPanel({ cells }: { cells: NotebookCell[] }) {
   return (
     <div className="flex flex-col gap-3">
       {cells.map((cell) => (
-        <CellCard key={cell.id} cell={cell} />
+        <CellCard key={cell.id} cell={cell} onRevert={onRevert} reverting={reverting} />
       ))}
     </div>
   );

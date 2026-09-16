@@ -21,7 +21,9 @@ export default function SessionsPage() {
   const load = () => {
     listSessions()
       .then(setSessions)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Could not load sessions."));
+      .catch((err: unknown) =>
+        setError(err instanceof ApiError ? err.message : "Could not load sessions."),
+      );
   };
 
   useEffect(load, []);

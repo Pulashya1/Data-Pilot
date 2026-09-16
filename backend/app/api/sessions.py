@@ -25,6 +25,7 @@ from app.schemas.dataset import DatasetProfile
 from app.schemas.session import (
     PreviewResponse,
     SessionDetail,
+    SessionSettingsRequest,
     SessionSummary,
     SheetSelectionRequest,
 )
@@ -171,6 +172,21 @@ async def select_sheet(
     session.preview_rows = preview_rows
     session.row_count = profile.n_rows
     session.column_count = profile.n_columns
+    await db.commit()
+    return session
+
+
+@router.post("/{session_id}/settings", response_model=SessionDetail)
+async def update_session_settings(
+    session_id: str,
+    body: SessionSettingsRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UploadSession:
+    """MASTER_PROMPT.md §5.4/§7: the per-session "let the agent decide" toggle. Only affects
+    decisions reached *after* this call — one already paused and awaiting the user keeps
+    waiting for an explicit answer rather than silently auto-resolving."""
+    session = await _get_session_or_404(session_id, db)
+    session.auto_decide = body.auto_decide
     await db.commit()
     return session
 
