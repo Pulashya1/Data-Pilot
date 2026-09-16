@@ -42,7 +42,12 @@ dev = [
     "matplotlib==3.10.0",
     "seaborn==0.13.2",
     "scipy==1.16.3",
-    "statsmodels==0.14.4",
+    # 0.14.4 (still fine for the kernel image's older pandas 2.2.3, kernel_image/requirements.txt)
+    # calls pandas' deprecate_kwarg with its pre-3.0 2-arg signature; pandas 3.0.5 here requires
+    # a leading `klass` arg, which breaks statsmodels.tsa.stattools / stats.diagnostic / api at
+    # import time. 0.15.0 is the first release built against pandas 3.x.
+    "statsmodels==0.15.0",
+    "scikit-learn==1.5.1",
     "ipython==8.27.0",
 ]
 

@@ -39,6 +39,12 @@ def test_list_templates_returns_the_core_set(client: TestClient) -> None:
         "univariate_distributions",
         "outliers",
         "correlations",
+        "class_balance",
+        "classification_feature_analysis",
+        "regression_target_analysis",
+        "leakage_checks",
+        "clustering_analysis",
+        "time_series_analysis",
     }
 
 

@@ -44,4 +44,14 @@ def classify_severity(template_key: str, summary: dict[str, Any]) -> Severity:
             return "warning"
         return "info"
 
+    if template_key == "class_balance":
+        return _bucket(summary.get("imbalance_ratio") or 0, warning=3, critical=10)
+
+    if template_key == "leakage_checks":
+        if summary.get("near_duplicate_columns") or summary.get("id_like_correlated_with_target"):
+            return "critical"
+        if summary.get("high_correlation_features") or summary.get("suspicious_name_columns"):
+            return "warning"
+        return "info"
+
     return "info"

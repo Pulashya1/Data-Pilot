@@ -143,6 +143,36 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
   full-auto-run tests now call `POST /sessions/{id}/settings {"auto_decide": true}` first, since
   auto-decide is no longer the default.
 
+## Problem-type modules (Phase 5)
+- `app/analysis/templates/`: classification (`class_balance`, `classification_feature_analysis`
+  — mutual info, chi-square, ANOVA F-test), regression (`regression_target_analysis` — skew/
+  transform suggestion, top-feature scatter plots, mutual info, a Breusch-Pagan heteroscedasticity
+  check), clustering (`clustering_analysis` — scaling report, PCA explained variance + 2D
+  projection, Hopkins statistic, elbow/silhouette suggested k), time series
+  (`time_series_analysis` — date-column detection, frequency/gaps, seasonal decomposition,
+  ACF/PACF, lag/split suggestions), and `leakage_checks` (near-duplicate/high-correlation/
+  ID-like/suspicious-name checks against the target — always runs for classification and
+  regression, not clustering/time-series, per MASTER_PROMPT.md §5.3).
+- `app/agent/planning.py::build_plan` now returns the generic EDA core followed by each problem
+  type's extra templates (`_PROBLEM_TYPE_EXTRA`), read from the same `TEMPLATES` registry.
+- `app/notebook/seed.py::render_and_run_template_step` injects `target_column`/`problem_type`
+  into every template's rendered params *after* calling `Template.default_params(profile)` —
+  deliberately not part of that function's signature, so all Phase 2/3 templates (which only
+  take `profile`) are untouched. A problem-type template with no target (e.g. run manually via
+  `POST /templates/{key}/run` before a target is confirmed) degrades to a no-target summary
+  rather than erroring.
+- `app/agent/insight_severity.py` has explicit buckets for `class_balance` (imbalance ratio) and
+  `leakage_checks` (critical on near-duplicate/ID-correlation, warning on high-correlation/
+  suspicious names); every other new template key falls through to the existing `"info"` default.
+- **Dependency fix**: `statsmodels` was bumped `0.14.4` -> `0.15.0` in `backend/pyproject.toml`'s
+  `dev` extra — 0.14.4 calls pandas' `deprecate_kwarg` with its pre-3.0 two-argument signature,
+  which breaks (`TypeError`) against pandas 3.0.5's `deprecate_kwarg(klass, old_arg_name,
+  new_arg_name, ...)` the moment anything imports `statsmodels.api`, `.tsa.stattools`, or
+  `.stats.diagnostic` — as the new regression/time-series templates' `exec()`-based tests do.
+  0.15.0 is the first release built against pandas 3.x. The sandboxed kernel image pins its own
+  older, compatible `statsmodels==0.14.4` (`kernel_image/requirements.txt`) and is unaffected.
+
 ## Build phases
-Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)** and
-**Phase 4 (human-in-the-loop)** complete and passing tests, awaiting review before Phase 5.
+Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)**,
+**Phase 4 (human-in-the-loop)**, and **Phase 5 (problem-type modules)** complete and passing
+tests, awaiting review before Phase 6.

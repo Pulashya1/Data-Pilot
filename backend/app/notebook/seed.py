@@ -75,9 +75,21 @@ async def render_and_run_template_step(
     """Render `template`, run it in the session's kernel, and append its insight bullets as a
     markdown cell. Returns every cell created (the code cell, plus an insight cell if any) and
     the raw `##DATAPILOT_SUMMARY##` dict (so callers like the agent's `execute_step` node can
-    classify insight severity without re-parsing cell output)."""
+    classify insight severity without re-parsing cell output).
+
+    `target_column`/`problem_type` are injected here rather than threaded through
+    `Template.default_params`'s signature, so every existing template (which only takes
+    `profile`) is unaffected; problem-type-specific templates (MASTER_PROMPT.md §5.3, §12
+    Phase 5) read them out of `params` and degrade to a no-target summary when absent (e.g. the
+    manual `POST /templates/{key}/run` API, or a session with no confirmed target).
+    """
     profile = DatasetProfile.model_validate(session.profile)
-    code = template.render(template.default_params(profile))
+    params = {
+        **template.default_params(profile),
+        "target_column": session.target_column,
+        "problem_type": session.problem_type.value if session.problem_type else None,
+    }
+    code = template.render(params)
     cell = await builder.add_code_cell(db, session.id, code, label=template.title)
     await db.flush()
 

@@ -344,7 +344,6 @@ async def summarize_node(state: AgentState) -> dict[str, Any]:
         "### Next steps",
         "- Revisit any decision above from the Decisions panel, or revert to an earlier cell "
         "and re-run.",
-        "- Re-run with problem-type-specific templates once Phase 5 adds them.",
     ]
     await builder.add_markdown_cell(deps.db, session_id, "\n".join(lines))
 
