@@ -230,6 +230,150 @@ def test_clustering_analysis_reports_pca_and_hopkins() -> None:
     assert summary["suggested_k"] == 2
 
 
+def test_feature_engineering_builds_a_fitted_pipeline() -> None:
+    template = TEMPLATES["feature_engineering"]
+    rng = np.random.default_rng(9)
+    n = 200
+    df = pd.DataFrame(
+        {
+            "row_id": range(1, n + 1),
+            "always_x": ["x"] * n,
+            "age": rng.normal(40, 10, n),
+            "city": rng.choice(["a", "b", "c"], n),
+            "target": rng.integers(0, 2, n),
+        }
+    )
+    params = {
+        **template.default_params(_sample_profile(df)),
+        "target_column": "target",
+        "problem_type": "binary_classification",
+    }
+    code = template.render(params)
+    stdout = _run_code(code, df)
+    marker_line = next(line for line in stdout.splitlines() if line.startswith(MARKER))
+    summary = json.loads(marker_line[len(MARKER) :])
+
+    assert "row_id" in summary["dropped_id_like"]
+    assert "always_x" in summary["dropped_constant"]
+    assert summary["numeric_columns"] == ["age"]
+    assert summary["categorical_columns"] == ["city"]
+    assert summary["split_strategy"] == "stratified"
+    assert summary["train_rows"] + summary["test_rows"] == n
+    assert summary["n_features_out"] > 0
+
+    pipeline_line = next(
+        line for line in stdout.splitlines() if line.startswith("##DATAPILOT_PIPELINE##")
+    )
+    import base64
+    import io as _io
+
+    import joblib
+
+    pipeline_bytes = base64.b64decode(pipeline_line[len("##DATAPILOT_PIPELINE##") :])
+    pipeline = joblib.load(_io.BytesIO(pipeline_bytes))
+    transformed = pipeline.transform(df.drop(columns=["target"]))
+    assert transformed.shape[1] == summary["n_features_out"]
+
+    insights = template.summarize(summary)
+    assert any("dropped" in b.lower() for b in insights)
+
+
+def test_feature_engineering_handles_no_target_and_high_cardinality() -> None:
+    template = TEMPLATES["feature_engineering"]
+    rng = np.random.default_rng(10)
+    n = 50
+    df = pd.DataFrame(
+        {
+            "age": rng.normal(40, 10, n),
+            # 30 distinct values across 50 rows: high-cardinality (> the default threshold of
+            # 15) but not ID-like (unique ratio 0.6, well under the 0.98 id-like cutoff).
+            "high_card": [f"v{i}" for i in rng.integers(0, 30, n)],
+        }
+    )
+    params = {
+        **template.default_params(_sample_profile(df)),
+        "target_column": None,
+        "problem_type": None,
+    }
+    code = template.render(params)
+    stdout = _run_code(code, df)
+    marker_line = next(line for line in stdout.splitlines() if line.startswith(MARKER))
+    summary = json.loads(marker_line[len(MARKER) :])
+    assert "high_card" in summary["excluded_high_cardinality"]
+    assert summary["split_strategy"] == "none"
+
+
+def test_baseline_model_reports_metrics_and_importance() -> None:
+    template = TEMPLATES["baseline_model"]
+    rng = np.random.default_rng(11)
+    n = 200
+    signal = rng.normal(0, 1, n)
+    target = (signal > 0).astype(int)
+    df = pd.DataFrame(
+        {
+            "signal": signal,
+            "noise": rng.normal(0, 1, n),
+            "target": target,
+        }
+    )
+    params = {
+        **template.default_params(_sample_profile(df)),
+        "target_column": "target",
+        "problem_type": "binary_classification",
+    }
+    code = template.render(params)
+    stdout = _run_code(code, df)
+    marker_line = next(line for line in stdout.splitlines() if line.startswith(MARKER))
+    summary = json.loads(marker_line[len(MARKER) :])
+
+    assert summary["model"] == "RandomForestClassifier"
+    assert summary["metrics"]["accuracy"] > 0.7
+    assert "roc_auc" in summary["metrics"]
+    assert "signal" in next(iter(summary["top_feature_importances"]))
+
+    insights = template.summarize(summary)
+    assert any("baseline" in b.lower() for b in insights)
+
+
+def test_baseline_model_regression_reports_rmse() -> None:
+    template = TEMPLATES["baseline_model"]
+    rng = np.random.default_rng(12)
+    n = 200
+    x1 = rng.normal(0, 1, n)
+    df = pd.DataFrame(
+        {"x1": x1, "noise": rng.normal(0, 1, n), "target": x1 * 5 + rng.normal(0, 0.5, n)}
+    )
+    params = {
+        **template.default_params(_sample_profile(df)),
+        "target_column": "target",
+        "problem_type": "regression",
+    }
+    code = template.render(params)
+    stdout = _run_code(code, df)
+    marker_line = next(line for line in stdout.splitlines() if line.startswith(MARKER))
+    summary = json.loads(marker_line[len(MARKER) :])
+    assert summary["model"] == "RandomForestRegressor"
+    assert "rmse" in summary["metrics"]
+    assert summary["metrics"]["r2"] > 0.5
+
+
+def test_baseline_model_skips_without_a_target() -> None:
+    template = TEMPLATES["baseline_model"]
+    df = _sample_df()
+    params = {
+        **template.default_params(_sample_profile(df)),
+        "target_column": None,
+        "problem_type": None,
+    }
+    code = template.render(params)
+    stdout = _run_code(code, df)
+    marker_line = next(line for line in stdout.splitlines() if line.startswith(MARKER))
+    summary = json.loads(marker_line[len(MARKER) :])
+    assert summary["skipped_reason"]
+    insights = template.summarize(summary)
+    assert any("skipped" in b.lower() for b in insights)
+
+
 def test_time_series_analysis_detects_date_and_seasonality() -> None:
     template = TEMPLATES["time_series_analysis"]
     rng = np.random.default_rng(8)

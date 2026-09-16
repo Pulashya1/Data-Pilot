@@ -12,7 +12,9 @@ it explicitly; the rest exercise the real pause/answer/resume flow.
 """
 
 import io
+import json
 import time
+import zipfile
 from typing import Any
 
 import pandas as pd
@@ -102,7 +104,12 @@ async def test_agent_run_records_decisions(client: TestClient, db_session: Async
     result = await db_session.execute(select(Decision).where(Decision.session_id == session_id))
     decisions = result.scalars().all()
     kinds = {d.kind.value for d in decisions}
-    assert kinds == {"target_confirmation", "plan_approval"}
+    assert kinds == {
+        "target_confirmation",
+        "plan_approval",
+        "feature_engineering_approval",
+        "baseline_approval",
+    }
     assert all(d.auto_decided for d in decisions)
 
 
@@ -215,6 +222,21 @@ def test_editing_the_plan_drops_and_reorders_steps(client: TestClient) -> None:
     assert edited.status_code == 200
     assert edited.json()["selected_option"] == "correlations,duplicates"
 
+    # Phase 6: feature_engineering_approval and baseline_approval (target is confirmed and
+    # binary_classification, so both are asked) also pause since auto_decide is off here.
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    fe_decision = _pending_decision(client, session_id, "feature_engineering_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": "recommended"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    baseline_decision = _pending_decision(client, session_id, "baseline_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{baseline_decision['id']}",
+        json={"selected_option": "yes"},
+    )
+
     session = _wait_for_agent(client, session_id)
     assert session["agent_status"] == "done", session.get("agent_error_message")
     assert session["plan_steps"] == ["correlations", "duplicates"]
@@ -268,3 +290,151 @@ def test_double_answering_a_decision_409s(client: TestClient) -> None:
         json={"selected_option": "age"},
     )
     assert second.status_code == 409
+
+
+# --- Phase 6: feature engineering & baseline (MASTER_PROMPT.md §5.1 steps 5/6, §12) ---------
+
+
+def test_feature_engineering_and_baseline_run_with_auto_decide(client: TestClient) -> None:
+    session_id = _upload_with_auto_decide(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    session = _wait_for_agent(client, session_id)
+    assert session["agent_status"] == "done", session.get("agent_error_message")
+
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = [c["label"] for c in notebook if c["cell_type"] == "code"]
+    assert "Feature engineering pipeline" in labels
+    assert "Baseline model" in labels
+    fe_cell = next(c for c in notebook if c["label"] == "Feature engineering pipeline")
+    assert fe_cell["status"] == "success"
+    baseline_cell = next(c for c in notebook if c["label"] == "Baseline model")
+    assert baseline_cell["status"] == "success"
+
+    decisions = client.get(f"/sessions/{session_id}/decisions").json()
+    kinds = {d["kind"]: d for d in decisions}
+    assert kinds["feature_engineering_approval"]["selected_option"] == "recommended"
+    assert kinds["baseline_approval"]["selected_option"] == "yes"
+
+    # The fitted pipeline artifact was persisted and is downloadable via export.
+    export = client.post(f"/sessions/{session_id}/notebook/export?include_pipeline=true")
+    assert export.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(export.content)) as zf:
+        assert "pipeline.joblib" in zf.namelist()
+        assert len(zf.read("pipeline.joblib")) > 0
+
+
+def test_export_without_include_pipeline_omits_the_artifact(client: TestClient) -> None:
+    session_id = _upload_with_auto_decide(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_agent(client, session_id)
+
+    export = client.post(f"/sessions/{session_id}/notebook/export")
+    assert export.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(export.content)) as zf:
+        assert "pipeline.joblib" not in zf.namelist()
+
+
+def _approve_through_plan(client: TestClient, session_id: str) -> None:
+    """Answers target_confirmation (churned) then the recommended plan, for a session started
+    without auto_decide, leaving it paused at `feature_engineering_approval` next."""
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    target_decision = _pending_decision(client, session_id, "target_confirmation")
+    client.post(
+        f"/sessions/{session_id}/decisions/{target_decision['id']}",
+        json={"selected_option": "churned"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    plan_decision = _pending_decision(client, session_id, "plan_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{plan_decision['id']}",
+        json={"selected_option": plan_decision["recommended_option"]},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+
+
+def test_declining_the_baseline_skips_it(client: TestClient) -> None:
+    session_id = _upload(client)
+    _approve_through_plan(client, session_id)
+    fe_decision = _pending_decision(client, session_id, "feature_engineering_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": "recommended"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    baseline_decision = _pending_decision(client, session_id, "baseline_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{baseline_decision['id']}",
+        json={"selected_option": "no"},
+    )
+
+    session = _wait_for_agent(client, session_id)
+    assert session["agent_status"] == "done", session.get("agent_error_message")
+
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = {c["label"] for c in notebook if c["cell_type"] == "code"}
+    assert "Feature engineering pipeline" in labels
+    assert "Baseline model" not in labels
+
+
+def test_feature_engineering_json_override_is_applied(client: TestClient) -> None:
+    session_id = _upload(client)
+    _approve_through_plan(client, session_id)
+    fe_decision = _pending_decision(client, session_id, "feature_engineering_approval")
+
+    bad = client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": "not json and not 'recommended'"},
+    )
+    assert bad.status_code == 400
+
+    bad_key = client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": json.dumps({"not_a_real_option": 1})},
+    )
+    assert bad_key.status_code == 400
+
+    good = client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": json.dumps({"scaling": "none", "numeric_impute": "mean"})},
+    )
+    assert good.status_code == 200
+
+    _wait_for_status(client, session_id, ("waiting_decision", "done", "error"))
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    fe_cell = next(c for c in notebook if c["label"] == "Feature engineering pipeline")
+    assert "'mean'" in fe_cell["source"]
+    assert fe_cell["status"] == "success"
+
+
+def test_baseline_is_never_asked_without_a_target(client: TestClient) -> None:
+    session_id = _upload(client)
+    client.post(f"/sessions/{session_id}/agent/start")
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    target_decision = _pending_decision(client, session_id, "target_confirmation")
+    client.post(
+        f"/sessions/{session_id}/decisions/{target_decision['id']}",
+        json={"selected_option": "(no target)"},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    plan_decision = _pending_decision(client, session_id, "plan_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{plan_decision['id']}",
+        json={"selected_option": plan_decision["recommended_option"]},
+    )
+    _wait_for_status(client, session_id, ("waiting_decision",))
+    fe_decision = _pending_decision(client, session_id, "feature_engineering_approval")
+    client.post(
+        f"/sessions/{session_id}/decisions/{fe_decision['id']}",
+        json={"selected_option": "recommended"},
+    )
+
+    # No baseline_approval decision should ever appear — the graph goes straight to "done".
+    session = _wait_for_agent(client, session_id)
+    assert session["agent_status"] == "done", session.get("agent_error_message")
+    decisions = client.get(f"/sessions/{session_id}/decisions").json()
+    assert not any(d["kind"] == "baseline_approval" for d in decisions)
+    notebook = client.get(f"/sessions/{session_id}/notebook").json()
+    labels = {c["label"] for c in notebook if c["cell_type"] == "code"}
+    assert "Feature engineering pipeline" in labels
+    assert "Baseline model" not in labels

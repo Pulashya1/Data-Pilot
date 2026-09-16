@@ -16,6 +16,7 @@ export function AnalysisActions({
   const [kernel, setKernel] = useState<KernelStatusOut["status"]>("stopped");
   const [runningKey, setRunningKey] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [includePipeline, setIncludePipeline] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export function AnalysisActions({
     setExporting(true);
     setError(null);
     try {
-      await exportNotebook(sessionId, false);
+      await exportNotebook(sessionId, false, includePipeline);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not export notebook.");
     } finally {
@@ -71,14 +72,24 @@ export function AnalysisActions({
             kernel: {kernel}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleExport()}
-          disabled={exporting}
-          className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium disabled:opacity-50 dark:border-neutral-700"
-        >
-          {exporting ? "Exporting…" : "Export notebook"}
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-400">
+            <input
+              type="checkbox"
+              checked={includePipeline}
+              onChange={(e) => setIncludePipeline(e.target.checked)}
+            />
+            Include fitted pipeline
+          </label>
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium disabled:opacity-50 dark:border-neutral-700"
+          >
+            {exporting ? "Exporting…" : "Export notebook"}
+          </button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">
         {templates.map((t) => (

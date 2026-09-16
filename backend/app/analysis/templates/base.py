@@ -7,8 +7,16 @@ models and minimizes tokens. Each rendered cell's last stdout line is a
 output and strips it from what the user sees, and `Template.summarize` turns those exact
 numbers into 2-4 insight bullets — so the insight text is always grounded in what the
 kernel actually computed.
+
+`extract_pipeline_artifact` (Phase 6, MASTER_PROMPT.md §5.1 step 5, §5.2 `export`) reuses the
+same stdout-marker mechanism for a second, optional payload: the `feature_engineering`
+template base64-encodes its fitted `Pipeline` (joblib, in-memory — no container filesystem
+access needed) behind a `##DATAPILOT_PIPELINE##` marker line. Every other template simply
+never prints that marker, so this is a no-op for them.
 """
 
+import base64
+import binascii
 import contextlib
 import json
 from collections.abc import Callable
@@ -19,6 +27,7 @@ from app.schemas.dataset import DatasetProfile
 from app.schemas.execution import ExecutionResult
 
 MARKER = "##DATAPILOT_SUMMARY##"
+PIPELINE_MARKER = "##DATAPILOT_PIPELINE##"
 
 
 @dataclass
@@ -31,10 +40,10 @@ class Template:
     default_params: Callable[[DatasetProfile], dict[str, Any]]
 
 
-def extract_summary(result: ExecutionResult) -> dict[str, Any] | None:
-    """Split the summary marker out of stream outputs; returns the parsed summary (if any)
-    and mutates nothing — callers should replace `result.outputs` with the cleaned list."""
-    summary: dict[str, Any] | None = None
+def _extract_marker_line(result: ExecutionResult, marker: str) -> str | None:
+    """Strips every stdout line starting with `marker` out of `result.outputs` (mutated in
+    place) and returns the last one's payload (the text after the marker), if any."""
+    captured: str | None = None
     cleaned: list[dict[str, Any]] = []
     for output in result.outputs:
         if output.get("output_type") != "stream":
@@ -42,16 +51,39 @@ def extract_summary(result: ExecutionResult) -> dict[str, Any] | None:
             continue
         kept_lines = []
         for line in output["text"].splitlines():
-            if line.startswith(MARKER):
-                with contextlib.suppress(json.JSONDecodeError):
-                    summary = json.loads(line[len(MARKER) :])
+            if line.startswith(marker):
+                captured = line[len(marker) :]
                 continue
             kept_lines.append(line)
         text = "\n".join(kept_lines)
         if text.strip():
             cleaned.append({**output, "text": text + "\n"})
     result.outputs = cleaned
-    return summary
+    return captured
+
+
+def extract_summary(result: ExecutionResult) -> dict[str, Any] | None:
+    """Splits the `##DATAPILOT_SUMMARY##` marker line out of stream outputs and parses it;
+    mutates `result.outputs` to hide the marker line from the user."""
+    raw = _extract_marker_line(result, MARKER)
+    if raw is None:
+        return None
+    with contextlib.suppress(json.JSONDecodeError):
+        return json.loads(raw)  # type: ignore[no-any-return]
+    return None
+
+
+def extract_pipeline_artifact(result: ExecutionResult) -> bytes | None:
+    """Splits the `##DATAPILOT_PIPELINE##` marker line (base64-encoded joblib bytes) out of
+    stream outputs; mutates `result.outputs` to hide the marker line from the user. Must be
+    called after `extract_summary` has already cleaned `result.outputs` once."""
+    raw = _extract_marker_line(result, PIPELINE_MARKER)
+    if raw is None:
+        return None
+    try:
+        return base64.b64decode(raw, validate=True)
+    except binascii.Error:
+        return None
 
 
 def numeric_columns(profile: DatasetProfile, limit: int = 12) -> list[str]:

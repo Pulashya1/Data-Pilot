@@ -211,7 +211,11 @@ export interface UsageOut {
 
 // Human-in-the-loop decisions (Phase 4, MASTER_PROMPT.md §5.4, §8, §12)
 
-export type DecisionKind = "target_confirmation" | "plan_approval";
+export type DecisionKind =
+  | "target_confirmation"
+  | "plan_approval"
+  | "feature_engineering_approval"
+  | "baseline_approval";
 
 export interface DecisionOut {
   id: string;

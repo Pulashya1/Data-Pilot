@@ -49,6 +49,15 @@ dev = [
     "statsmodels==0.15.0",
     "scikit-learn==1.5.1",
     "ipython==8.27.0",
+    # Phase 6 (feature_engineering/baseline_model templates, MASTER_PROMPT.md §12). joblib is
+    # already a transitive dependency of scikit-learn, but both templates `import joblib`
+    # directly, so it gets its own explicit pin here too.
+    "joblib==1.4.2",
+    # shap==0.46.0 (kernel_image/requirements.txt's pin, fine against its older numpy==1.26.4)
+    # crashes on `import shap` here: numpy 2.5.3 changed `np.dtype(np.floating)` handling,
+    # which shap 0.46's `plots/colors/_colorconv.py` hits at *module import time* computing a
+    # color constant — unrelated to anything this project calls. 0.52.0 is numpy-2-compatible.
+    "shap==0.52.0",
 ]
 
 [tool.ruff]

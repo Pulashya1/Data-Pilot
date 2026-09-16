@@ -84,3 +84,17 @@ def test_build_export_zip_with_data() -> None:
     with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
         assert "data/sales.csv" in zf.namelist()
         assert zf.read("data/sales.csv") == b"a,b\n1,2\n"
+
+
+def test_build_export_zip_with_pipeline() -> None:
+    zip_bytes = build_export_zip(
+        session=_session(),
+        cells=_cells(),
+        kernel_requirements_text="pandas==2.2.3\n",
+        include_data=False,
+        dataset_bytes=None,
+        pipeline_bytes=b"not-really-a-joblib-file",
+    )
+    with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+        assert "pipeline.joblib" in zf.namelist()
+        assert zf.read("pipeline.joblib") == b"not-really-a-joblib-file"

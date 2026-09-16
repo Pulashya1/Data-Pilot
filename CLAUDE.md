@@ -172,7 +172,56 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
   0.15.0 is the first release built against pandas 3.x. The sandboxed kernel image pins its own
   older, compatible `statsmodels==0.14.4` (`kernel_image/requirements.txt`) and is unaffected.
 
+## Feature engineering & baseline (Phase 6)
+- Two more `app/analysis/templates/` entries, both self-contained like every other template
+  (MASTER_PROMPT.md §5.3) — neither assumes the other ran first, since §5.1 step 3 lets the
+  user freely reorder/skip/add EDA-plan steps:
+  - `feature_engineering` — builds a scikit-learn `ColumnTransformer`/`Pipeline` (impute, scale,
+    one-hot encode low-cardinality categoricals; drops constant/ID-like columns, recomputed at
+    render time the same way `constant_and_id_columns.py` does — except float-dtype columns are
+    excluded from the ID-like check, since a continuous numeric feature is often ~100% unique
+    too and unlike a real ID shouldn't be dropped). Splits are strategy-appropriate: stratified
+    for classification, time-ordered for time series, random otherwise, skipped for
+    clustering/no-target (the pipeline still fits on the full `X`).
+  - `baseline_model` — trains a quick `RandomForestClassifier`/`RandomForestRegressor` (its own
+    light inline preprocessing, deliberately not sharing kernel state with
+    `feature_engineering` for the reason above) and reports metrics, feature importance, and a
+    SHAP summary plot via `shap.TreeExplainer` (exact and fast — no sampling-based
+    `KernelExplainer`). No-ops for clustering/time-series/no-target sessions.
+- **Pipeline artifact, no container-filesystem access needed**: `feature_engineering`
+  base64-encodes its fitted `Pipeline` (joblib, in-memory) behind a second stdout marker,
+  `##DATAPILOT_PIPELINE##` (`app/analysis/templates/base.py`'s `extract_pipeline_artifact`,
+  alongside the existing `##DATAPILOT_SUMMARY##`/`extract_summary`). `render_and_run_template_step`
+  (`app/notebook/seed.py`) uploads it to storage generically for any template that emits it and
+  sets `UploadSession.pipeline_storage_key`; `POST /sessions/{id}/notebook/export?include_pipeline=true`
+  fetches it and adds `pipeline.joblib` to the export zip — this is how MASTER_PROMPT.md §5.2's
+  `export(format=pipeline_joblib)` and §6's "the exported pipeline code" are implemented, as a
+  zip flag on the one existing export endpoint rather than a separate route/format value.
+- **New graph steps**: `feature_engineering` -> `baseline` run between the EDA `execute_step`
+  loop and `summarize` (`app/agent/graph.py`). Each has its own decision kind
+  (`feature_engineering_approval`, `baseline_approval`, `app/models/decision.py`), created and
+  resolved the same guarded way as every other decision (`app.agent.decisions`'s replay-safety
+  rules). `feature_engineering` always runs (a pipeline is useful even for clustering/no-target);
+  `baseline` is skipped without even asking when there's no confirmed classification/regression
+  target. Both templates are still excluded from the *editable EDA plan*'s options
+  (`app/agent/planning.py`'s `EDA_PLAN_TEMPLATE_KEYS`), since they're separate graph steps with
+  their own dedicated decisions, not `plan_approval` steps — otherwise they'd be addable twice.
+- `feature_engineering_approval`'s answer is either the literal `"recommended"` or a JSON object
+  overriding any of `numeric_impute`/`categorical_impute`/`scaling`/`high_cardinality_threshold`/
+  `test_size`/`drop_columns` (validated in `app.agent.decisions.validate_answer`, merged into the
+  template's params via `render_and_run_template_step`'s new `extra_params` kwarg — the same
+  minimally-invasive injection pattern Phase 5 used for `target_column`/`problem_type`).
+- **Dependency fixes** (`backend/pyproject.toml`'s `dev` extra, same "two separate environments"
+  reasoning as Phase 5's statsmodels fix — the sandboxed kernel image keeps its own older,
+  compatible pins in `kernel_image/requirements.txt`, unaffected either way):
+  - `joblib==1.4.2` added explicitly (already a transitive scikit-learn dependency, but both new
+    templates `import joblib` directly).
+  - `shap` bumped `0.46.0` (the kernel image's pin, fine against its older `numpy==1.26.4`) ->
+    `0.52.0`: 0.46.0 crashes on bare `import shap` here because `numpy==2.5.3` changed
+    `np.dtype(np.floating)` handling, which shap's `plots/colors/_colorconv.py` hits at *module
+    import time* computing an unrelated color constant. 0.52.0 is numpy-2-compatible.
+
 ## Build phases
-Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)**,
-**Phase 4 (human-in-the-loop)**, and **Phase 5 (problem-type modules)** complete and passing
-tests, awaiting review before Phase 6.
+Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)** through
+**Phase 6 (feature engineering & baseline)** complete and passing tests, awaiting review before
+Phase 7.

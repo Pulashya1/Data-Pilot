@@ -7,6 +7,8 @@ import type { DecisionOut } from "@/types";
 const KIND_LABEL: Record<string, string> = {
   target_confirmation: "Confirm target",
   plan_approval: "Approve plan",
+  feature_engineering_approval: "Approve feature engineering",
+  baseline_approval: "Run baseline model?",
 };
 
 function TargetConfirmationCard({

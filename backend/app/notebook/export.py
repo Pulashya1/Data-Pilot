@@ -57,7 +57,13 @@ def build_export_zip(
     kernel_requirements_text: str,
     include_data: bool,
     dataset_bytes: bytes | None,
+    pipeline_bytes: bytes | None = None,
 ) -> bytes:
+    """`pipeline_bytes` (MASTER_PROMPT.md §5.2 `export(format=pipeline_joblib)`, §6 "the exported
+    pipeline code", §12 Phase 6) is the joblib-serialized fitted preprocessing `Pipeline` from
+    the last successful `feature_engineering` cell, fetched by the caller
+    (`app/api/notebook.py`) from `session.pipeline_storage_key`. `None` (no pipeline has been
+    built yet, or the caller didn't ask for one) simply omits `pipeline.joblib` from the zip."""
     notebook = cells_to_notebook(cells)
     ipynb_text = nbformat.writes(notebook)
 
@@ -73,5 +79,8 @@ def build_export_zip(
         else:
             readme += "The dataset was not included in this export; add your own copy here.\n"
         zf.writestr("data/README.md", readme)
+
+        if pipeline_bytes is not None:
+            zf.writestr("pipeline.joblib", pipeline_bytes)
 
     return buffer.getvalue()

@@ -144,6 +144,7 @@ async def export_notebook(
     backend: Annotated[ExecutionBackend, Depends(get_execution_backend)],
     settings: Annotated[Settings, Depends(get_settings)],
     include_data: bool = False,
+    include_pipeline: bool = False,
 ) -> Response:
     session = await _get_ready_session_or_404(session_id, db)
     cells = await builder.get_cells(db, session_id)
@@ -174,12 +175,18 @@ async def export_notebook(
     finally:
         await backend.shutdown(handle)
 
+    pipeline_bytes = (
+        storage.download(session.pipeline_storage_key)
+        if include_pipeline and session.pipeline_storage_key
+        else None
+    )
     zip_bytes = build_export_zip(
         session=session,
         cells=cells,
         kernel_requirements_text=read_kernel_requirements(),
         include_data=include_data,
         dataset_bytes=dataset_bytes if include_data else None,
+        pipeline_bytes=pipeline_bytes,
     )
     filename = f"{session.original_filename.rsplit('.', 1)[0]}_datapilot_export.zip"
     return Response(

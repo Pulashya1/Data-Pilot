@@ -36,3 +36,5 @@ def test_unhandled_template_defaults_to_info() -> None:
     assert classify_severity("classification_feature_analysis", {"anova": {}}) == "info"
     assert classify_severity("clustering_analysis", {"hopkins_statistic": 0.9}) == "info"
     assert classify_severity("time_series_analysis", {"gap_count": 5}) == "info"
+    assert classify_severity("feature_engineering", {"n_features_out": 5}) == "info"
+    assert classify_severity("baseline_model", {"metrics": {"accuracy": 0.9}}) == "info"

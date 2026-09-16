@@ -37,6 +37,14 @@ PROBLEM_TYPE_TEMPLATE_ORDER: dict[str, list[str]] = {
     for problem_type, extra in _PROBLEM_TYPE_EXTRA.items()
 }
 
+# Templates offered as `plan_approval` options (MASTER_PROMPT.md §5.1 step 3's editable EDA
+# plan). `feature_engineering`/`baseline_model` (§12 Phase 6) are deliberately excluded: they're
+# separate graph steps with their own dedicated decisions (`app.agent.nodes.
+# feature_engineering_node`/`baseline_node`), not EDA-plan steps, so they'd otherwise be
+# addable twice.
+_NON_PLAN_TEMPLATE_KEYS = {"feature_engineering", "baseline_model"}
+EDA_PLAN_TEMPLATE_KEYS: list[str] = [key for key in TEMPLATES if key not in _NON_PLAN_TEMPLATE_KEYS]
+
 
 def build_plan(problem_type: str | None) -> list[str]:
     if problem_type is None:

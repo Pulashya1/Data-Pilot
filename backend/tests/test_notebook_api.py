@@ -45,6 +45,8 @@ def test_list_templates_returns_the_core_set(client: TestClient) -> None:
         "leakage_checks",
         "clustering_analysis",
         "time_series_analysis",
+        "feature_engineering",
+        "baseline_model",
     }
 
 

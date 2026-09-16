@@ -1,6 +1,6 @@
 """MASTER_PROMPT.md §5.1 `plan` / §12 Phase 5: problem-type -> template-order lookup."""
 
-from app.agent.planning import build_plan
+from app.agent.planning import EDA_PLAN_TEMPLATE_KEYS, build_plan
 from app.analysis.templates.registry import TEMPLATES
 
 _GENERIC_CORE = [
@@ -72,3 +72,21 @@ def test_every_planned_step_is_a_known_template() -> None:
     ):
         for key in build_plan(problem_type):
             assert key in TEMPLATES
+
+
+# --- Phase 6: feature engineering & baseline (MASTER_PROMPT.md §5.1 steps 5/6, §12) ---------
+# These are separate graph steps with their own dedicated decisions
+# (`app.agent.nodes.feature_engineering_node`/`baseline_node`), not editable EDA-plan steps.
+
+
+def test_feature_engineering_and_baseline_are_not_plan_options() -> None:
+    assert "feature_engineering" not in EDA_PLAN_TEMPLATE_KEYS
+    assert "baseline_model" not in EDA_PLAN_TEMPLATE_KEYS
+    for problem_type in (None, "regression", "binary_classification", "clustering"):
+        assert "feature_engineering" not in build_plan(problem_type)
+        assert "baseline_model" not in build_plan(problem_type)
+
+
+def test_feature_engineering_and_baseline_are_still_registered_templates() -> None:
+    assert "feature_engineering" in TEMPLATES
+    assert "baseline_model" in TEMPLATES

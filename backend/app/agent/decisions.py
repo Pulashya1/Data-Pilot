@@ -19,6 +19,8 @@ returns immediately without calling `interrupt()` again.
 
 # langgraph.types.interrupt pauses graph execution here and returns the resume value once the
 # graph is re-invoked with `Command(resume=...)` (see `app.agent.runner.AgentRunner.resume`).
+import json
+
 from langgraph.types import interrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,13 +30,28 @@ from app.models.decision import Decision, DecisionKind
 from app.models.session import AgentStatus, UploadSession
 from app.schemas.events import AgentStatusEvent, DecisionEvent
 
-# Only `plan_approval` answers are a delimited list the user can edit; `target_confirmation`
-# answers must be one of the enumerated column names (or "(no target)"), so its `options` list
-# already covers every valid answer. Kept here (not a DB column) since it's a fixed property of
-# the decision kind, not per-row data.
+# Only `plan_approval` and `feature_engineering_approval` answers can be more than one of the
+# enumerated `options` (a delimited step list, or a JSON override object respectively);
+# `target_confirmation` and `baseline_approval` answers must be exactly one of `options`. Kept
+# here (not a DB column) since it's a fixed property of the decision kind, not per-row data.
 ALLOWS_FREE_TEXT: dict[DecisionKind, bool] = {
     DecisionKind.TARGET_CONFIRMATION: False,
     DecisionKind.PLAN_APPROVAL: True,
+    DecisionKind.FEATURE_ENGINEERING_APPROVAL: True,
+    DecisionKind.BASELINE_APPROVAL: False,
+}
+
+# `feature_engineering_node` (app/agent/nodes.py) merges a validated override object straight
+# into the `feature_engineering` template's params (MASTER_PROMPT.md §12 Phase 6) — keep this in
+# sync with that template's `default_params`/`render` keys in
+# `app/analysis/templates/feature_engineering.py`.
+_FEATURE_ENGINEERING_OVERRIDE_KEYS = {
+    "numeric_impute",
+    "categorical_impute",
+    "scaling",
+    "high_cardinality_threshold",
+    "test_size",
+    "drop_columns",
 }
 
 
@@ -58,6 +75,24 @@ def validate_answer(decision: Decision, raw_answer: str) -> str:
         if unknown:
             raise InvalidAnswerError(f"Unknown analysis step(s): {', '.join(unknown)}")
         return ",".join(steps)
+
+    if decision.kind == DecisionKind.FEATURE_ENGINEERING_APPROVAL:
+        if answer in decision.options:
+            return answer
+        try:
+            overrides = json.loads(answer)
+        except json.JSONDecodeError as exc:
+            raise InvalidAnswerError(
+                "Answer must be 'recommended' or a JSON object of overrides."
+            ) from exc
+        if not isinstance(overrides, dict):
+            raise InvalidAnswerError("JSON override must be an object.")
+        unknown_keys = set(overrides) - _FEATURE_ENGINEERING_OVERRIDE_KEYS
+        if unknown_keys:
+            raise InvalidAnswerError(
+                f"Unknown feature engineering option(s): {', '.join(sorted(unknown_keys))}"
+            )
+        return answer
 
     if answer not in decision.options:
         raise InvalidAnswerError(f"'{answer}' is not one of the available options.")

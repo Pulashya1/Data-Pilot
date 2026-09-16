@@ -18,6 +18,8 @@ from app.core.db import Base
 class DecisionKind(str, enum.Enum):
     TARGET_CONFIRMATION = "target_confirmation"
     PLAN_APPROVAL = "plan_approval"
+    FEATURE_ENGINEERING_APPROVAL = "feature_engineering_approval"
+    BASELINE_APPROVAL = "baseline_approval"
 
 
 class Decision(Base):

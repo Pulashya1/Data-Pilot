@@ -4,11 +4,12 @@ Phase 3) — extracted so neither re-implements the render -> run -> summarize -
 sequence.
 """
 
+import io
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analysis.templates.base import Template, extract_summary
+from app.analysis.templates.base import Template, extract_pipeline_artifact, extract_summary
 from app.core.config import Settings
 from app.core.storage import StorageBackend
 from app.execution.backend import ExecutionBackend, KernelHandle
@@ -71,6 +72,8 @@ async def render_and_run_template_step(
     kernel_manager: KernelManager,
     settings: Settings,
     template: Template,
+    *,
+    extra_params: dict[str, Any] | None = None,
 ) -> tuple[list[NotebookCell], dict[str, Any] | None]:
     """Render `template`, run it in the session's kernel, and append its insight bullets as a
     markdown cell. Returns every cell created (the code cell, plus an insight cell if any) and
@@ -81,13 +84,20 @@ async def render_and_run_template_step(
     `Template.default_params`'s signature, so every existing template (which only takes
     `profile`) is unaffected; problem-type-specific templates (MASTER_PROMPT.md §5.3, §12
     Phase 5) read them out of `params` and degrade to a no-target summary when absent (e.g. the
-    manual `POST /templates/{key}/run` API, or a session with no confirmed target).
+    manual `POST /templates/{key}/run` API, or a session with no confirmed target). `extra_params`
+    (Phase 6) is merged in on top for the one caller that needs per-run overrides right now —
+    `feature_engineering_node`'s JSON decision answer — and is `None` everywhere else.
+
+    If the rendered code emits a `##DATAPILOT_PIPELINE##` artifact (currently only
+    `feature_engineering`), it's uploaded to storage and `session.pipeline_storage_key` is set;
+    every other template simply never prints that marker, so this is a no-op for them.
     """
     profile = DatasetProfile.model_validate(session.profile)
     params = {
         **template.default_params(profile),
         "target_column": session.target_column,
         "problem_type": session.problem_type.value if session.problem_type else None,
+        **(extra_params or {}),
     }
     code = template.render(params)
     cell = await builder.add_code_cell(db, session.id, code, label=template.title)
@@ -97,8 +107,15 @@ async def render_and_run_template_step(
     result = await kernel_manager.run_cell(session.id, code, on_start=on_start)
 
     summary = extract_summary(result)
+    pipeline_bytes = extract_pipeline_artifact(result)
     builder.apply_execution_result(cell, result)
     await db.flush()
+
+    if pipeline_bytes is not None:
+        key = f"sessions/{session.id}/pipeline.joblib"
+        storage.upload(key, io.BytesIO(pipeline_bytes), "application/octet-stream")
+        session.pipeline_storage_key = key
+        await db.flush()
 
     new_cells: list[NotebookCell] = [cell]
     if summary is not None:

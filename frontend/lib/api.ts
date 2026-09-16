@@ -162,9 +162,13 @@ export function subscribeToAgentStream(
   return () => source.close();
 }
 
-export async function exportNotebook(sessionId: string, includeData: boolean): Promise<void> {
+export async function exportNotebook(
+  sessionId: string,
+  includeData: boolean,
+  includePipeline = false,
+): Promise<void> {
   const res = await fetch(
-    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}`,
+    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}&include_pipeline=${includePipeline}`,
     { method: "POST", cache: "no-store" },
   );
   if (!res.ok) {

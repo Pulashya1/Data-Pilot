@@ -4,7 +4,7 @@ Agentic EDA & feature engineering assistant. See `MASTER_PROMPT.md` for the full
 
 ## Status
 
-Phase 5 (problem-type modules) complete — see `MASTER_PROMPT.md` §12 for the build-phase roadmap.
+Phase 6 (feature engineering & baseline) complete — see `MASTER_PROMPT.md` §12 for the build-phase roadmap.
 
 ## Quickstart
 

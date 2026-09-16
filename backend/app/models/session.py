@@ -81,6 +81,12 @@ class UploadSession(Base):
     # Human-in-the-loop (Phase 4, MASTER_PROMPT.md §5.4, §12)
     auto_decide: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Feature engineering & baseline (Phase 6, MASTER_PROMPT.md §5.1 steps 5/6, §12): set by the
+    # `feature_engineering` template's `##DATAPILOT_PIPELINE##` artifact (app/notebook/seed.py) —
+    # the storage key of the last fitted preprocessing Pipeline, joblib-serialized, used by the
+    # notebook export endpoint to optionally include `pipeline.joblib`.
+    pipeline_storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

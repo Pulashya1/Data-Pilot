@@ -21,7 +21,7 @@ from app.agent.decisions import create_or_get_decision, get_decision, resolve_de
 from app.agent.deps import NodeDeps
 from app.agent.insight_severity import classify_severity
 from app.agent.llm import LLMBudgetExceededError, LLMUnavailableError
-from app.agent.planning import build_plan
+from app.agent.planning import EDA_PLAN_TEMPLATE_KEYS, build_plan
 from app.agent.semantic_types import infer_semantic_types
 from app.agent.state import AgentState
 from app.agent.tools.schemas import CodeRepair, ProposeTargetAndProblemType
@@ -181,7 +181,7 @@ async def plan_node(state: AgentState) -> dict[str, Any]:
             session,
             kind=DecisionKind.PLAN_APPROVAL,
             question="Which analysis steps should run, and in what order?",
-            options=list(TEMPLATES.keys()),
+            options=EDA_PLAN_TEMPLATE_KEYS,
             recommended_option=",".join(steps),
             reasoning=(
                 "Deterministic template order for the confirmed problem type "
@@ -208,26 +208,34 @@ async def plan_node(state: AgentState) -> dict[str, Any]:
     return {"plan": steps, "step_index": 0}
 
 
-async def execute_step_node(state: AgentState) -> dict[str, Any]:
-    deps = deps_module.get(state["session_id"])
-    session_id = state["session_id"]
-    session = await deps.db.get(UploadSession, session_id)
-    assert session is not None
-
-    index = state["step_index"]
-    template_key = state["plan"][index]
+async def _run_template_and_report(
+    deps: NodeDeps,
+    session: UploadSession,
+    template_key: str,
+    *,
+    extra_params: dict[str, Any] | None = None,
+) -> None:
+    """Shared by `execute_step_node`, `feature_engineering_node`, and `baseline_node`: render +
+    run `template_key`'s cell, publish its cell/insight events, and repair-and-retry on error.
+    Callers apply any state mutation of their own (e.g. `plan_step_index`) to `session` *before*
+    calling this, since it's the one that commits."""
     template = TEMPLATES[template_key]
-
     new_cells, summary = await render_and_run_template_step(
-        deps.db, session, deps.storage, deps.backend, deps.kernel_manager, deps.settings, template
+        deps.db,
+        session,
+        deps.storage,
+        deps.backend,
+        deps.kernel_manager,
+        deps.settings,
+        template,
+        extra_params=extra_params,
     )
-    session.plan_step_index = index + 1
     await deps.db.commit()
 
     code_cell = new_cells[0]
     for cell in new_cells:
         await deps.bus.publish(
-            session_id,
+            session.id,
             CellUpdateEvent(cell_id=cell.id, status=cell.status.value, label=cell.label),
         )
 
@@ -238,7 +246,7 @@ async def execute_step_node(state: AgentState) -> dict[str, Any]:
         insight_cell = new_cells[-1] if len(new_cells) > 1 else None
         for text in template.summarize(summary):
             await deps.bus.publish(
-                session_id,
+                session.id,
                 InsightEvent(
                     text=text,
                     severity=severity,
@@ -246,7 +254,92 @@ async def execute_step_node(state: AgentState) -> dict[str, Any]:
                 ),
             )
 
+
+async def execute_step_node(state: AgentState) -> dict[str, Any]:
+    deps = deps_module.get(state["session_id"])
+    session_id = state["session_id"]
+    session = await deps.db.get(UploadSession, session_id)
+    assert session is not None
+
+    index = state["step_index"]
+    template_key = state["plan"][index]
+    session.plan_step_index = index + 1
+    await _run_template_and_report(deps, session, template_key)
     return {"step_index": index + 1}
+
+
+async def feature_engineering_node(state: AgentState) -> dict[str, Any]:
+    """MASTER_PROMPT.md §5.1 step 5, §12 Phase 6: build the preprocessing Pipeline from either
+    the deterministic defaults or a JSON override the user supplied when answering the decision
+    (`app.agent.decisions.validate_answer` validates the shape). Always runs — unlike the
+    baseline, a preprocessing pipeline is useful even for clustering/no-target sessions."""
+    deps = deps_module.get(state["session_id"])
+    session_id = state["session_id"]
+    session = await deps.db.get(UploadSession, session_id)
+    assert session is not None
+
+    decision = await get_decision(deps.db, session_id, DecisionKind.FEATURE_ENGINEERING_APPROVAL)
+    if decision is None:
+        decision = await create_or_get_decision(
+            deps,
+            session,
+            kind=DecisionKind.FEATURE_ENGINEERING_APPROVAL,
+            question="Build a preprocessing pipeline with the recommended defaults?",
+            options=["recommended"],
+            recommended_option="recommended",
+            reasoning=(
+                "Median/most-frequent imputation, standard-scaled numeric features, one-hot "
+                "encoded low-cardinality categoricals, and dropped constant/ID-like columns "
+                "(MASTER_PROMPT.md §5.1 step 5). Reply with a JSON object to override any of "
+                "numeric_impute, categorical_impute, scaling, high_cardinality_threshold, "
+                "test_size, drop_columns instead of 'recommended'."
+            ),
+        )
+
+    answer = await resolve_decision(deps, session, decision)
+    extra_params: dict[str, Any] = {} if answer == "recommended" else json.loads(answer)
+    await _run_template_and_report(deps, session, "feature_engineering", extra_params=extra_params)
+    return {}
+
+
+async def baseline_node(state: AgentState) -> dict[str, Any]:
+    """MASTER_PROMPT.md §5.1 step 6, §12 Phase 6: "baseline (optional, ask first)". Only
+    meaningful for a confirmed classification/regression target — skipped entirely (no decision,
+    no cell) for clustering/time-series/no-target sessions, same as `baseline_model`'s own
+    no-target degradation, just one level up so we don't even ask the question."""
+    deps = deps_module.get(state["session_id"])
+    session_id = state["session_id"]
+    session = await deps.db.get(UploadSession, session_id)
+    assert session is not None
+
+    if session.target_column is None or session.problem_type not in (
+        ProblemType.REGRESSION,
+        ProblemType.BINARY_CLASSIFICATION,
+        ProblemType.MULTICLASS_CLASSIFICATION,
+    ):
+        return {}
+
+    decision = await get_decision(deps.db, session_id, DecisionKind.BASELINE_APPROVAL)
+    if decision is None:
+        decision = await create_or_get_decision(
+            deps,
+            session,
+            kind=DecisionKind.BASELINE_APPROVAL,
+            question=(
+                "Train a quick baseline model and report metrics, feature importance, and a "
+                "SHAP summary?"
+            ),
+            options=["yes", "no"],
+            recommended_option="yes",
+            reasoning="Gives a reference point before deeper feature engineering or tuning.",
+        )
+
+    answer = await resolve_decision(deps, session, decision)
+    if answer == "no":
+        return {}
+
+    await _run_template_and_report(deps, session, "baseline_model")
+    return {}
 
 
 async def _repair_and_retry(
