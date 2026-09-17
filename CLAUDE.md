@@ -26,7 +26,7 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
   `docker build -t datapilot-kernel-relay:latest relay_image/`
 - Docker-backed kernel integration tests (excluded from the default `pytest` run — see below):
   `pytest -m docker`
-- Verify a real LLM key + tool calling works (`LLM_MODEL`/`GEMINI_API_KEY` etc. set in `.env`,
+- Verify a real LLM key + tool calling works (`LLM_MODEL`/`DEEPSEEK_API_KEY` etc. set in `.env`,
   needs Postgres reachable; no-ops if `LLM_MODEL=mock`): `python scripts/verify_llm.py`
 
 ### Frontend (from `frontend/`)
@@ -74,7 +74,7 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
 ## Conventions
 - Type hints everywhere (Python); strict TypeScript. Pydantic models at every backend boundary.
 - No bare `except`. Small, focused modules. Docstrings on public functions only where non-obvious.
-- Every LLM design decision must minimize calls/tokens — see MASTER_PROMPT.md §5.5 and §5.8. Zero paid LLM APIs.
+- Every LLM design decision must minimize calls/tokens — see MASTER_PROMPT.md §5.5 and §5.8. A paid LLM API is in use (DeepSeek); every call has a direct dollar cost, and the session-level cost budget (`LLM_MAX_COST_PER_SESSION_USD`) must be respected.
 - Standard analyses use tested templates in `backend/app/analysis/templates/`, not LLM-generated code (§5.3).
 - CI must never call a real LLM. Agent tests use `LLM_MODEL=mock`.
 - Never send the full dataset to the LLM (schema + stats + sample rows only, §5.5).

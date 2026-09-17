@@ -10,7 +10,8 @@ Phase 7 (Q&A) complete — see `MASTER_PROMPT.md` §12 for the build-phase roadm
 
 ```bash
 cp .env.example .env
-# fill in GEMINI_API_KEY etc. once you reach the phases that need it
+# fill in DEEPSEEK_API_KEY etc. once you reach the phases that need it — LLM_MODEL/LLM_FALLBACKS
+# configure the provider, never hardcoded (see MASTER_PROMPT.md §2)
 docker compose up --build
 ```
 

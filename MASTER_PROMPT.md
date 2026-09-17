@@ -17,8 +17,8 @@ DataPilot is an agentic data-analysis assistant. A user uploads a dataset, and a
 ### Core design principle
 **The notebook is the single source of truth.** Every analysis action is a notebook cell executed in the session's live kernel. The UI chat, charts, Q&A, and exported files all derive from this notebook plus the session's message history. No hidden analysis happens outside the notebook.
 
-### Cost principle
-This project must run at **zero LLM cost** using free API tiers. Every design choice should minimize LLM calls and tokens (see Section 5.5 and Section 5.8).
+### Cost discipline
+This project runs on a paid LLM API (currently DeepSeek), not a free tier — every design choice should still minimize LLM calls and tokens, since each call now has a direct dollar cost rather than just a quota one (see Section 5.5 and Section 5.8).
 
 ---
 
@@ -30,9 +30,9 @@ This project must run at **zero LLM cost** using free API tiers. Every design ch
 
 **Agent:** LangGraph for orchestration (use `interrupt` for human-in-the-loop and a Postgres checkpointer for persistence).
 
-**LLM:** The primary provider is the Google Gemini API (free tier, a current Gemini Flash model), accessed through **LiteLLM** with tool calling.
+**LLM:** The provider is never hardcoded — configured via `LLM_MODEL`, accessed through **LiteLLM** with tool calling. Currently DeepSeek's chat model, on a paid plan.
 - The model name comes from the `LLM_MODEL` environment variable. Optional fallback models come from `LLM_FALLBACKS` (comma-separated, e.g. a Groq model).
-- Never hardcode model names. Never call a provider SDK directly outside `backend/app/agent/llm.py`. All LLM access goes through a single `LLMClient` wrapper, so providers can be swapped (Gemini, Groq, OpenRouter, Ollama) via configuration only.
+- Never hardcode model names. Never call a provider SDK directly outside `backend/app/agent/llm.py`. All LLM access goes through a single `LLMClient` wrapper, so providers can be swapped (DeepSeek, Gemini, Groq, OpenRouter, Ollama) via configuration only.
 - Implement retry with exponential backoff and jitter on rate-limit (429) and transient errors. After retries are exhausted, fail over to the next fallback model.
 - Log token usage, latency, model used, and errors for every call, aggregated per session.
 
@@ -51,7 +51,7 @@ This project must run at **zero LLM cost** using free API tiers. Every design ch
 ```
 [Next.js UI] <--SSE/WS--> [FastAPI API] <--> [LangGraph Agent] --tools--> [Kernel Manager] --> [Sandboxed Jupyter Kernel (Docker)]
                                |                   |
-                          [Postgres]          [LLMClient (LiteLLM)] --> Gemini (primary) / Groq (fallback) / Ollama (optional local)
+                          [Postgres]          [LLMClient (LiteLLM)] --> DeepSeek (primary) / Groq (fallback) / Ollama (optional local)
                           [Redis]
                           [S3/MinIO: uploads, exports, artifacts]
 ```
@@ -97,7 +97,7 @@ Implement these as typed tools with Pydantic schemas:
 - `revert_to_cell(cell_id)`: truncate the notebook after this cell and rebuild kernel state.
 - `export(format: ipynb|html|clean_csv|pipeline_joblib)`
 
-**Tool schema compatibility:** Keep JSON schemas simple and flat so they work across providers (Gemini, Groq, Ollama). Use basic types, enums, and required fields. Avoid deeply nested `anyOf`/`oneOf`, `$ref`, and unusual JSON Schema features. Validate all tool arguments with Pydantic. If the model returns malformed tool arguments, send the validation error back to the model and retry once.
+**Tool schema compatibility:** Keep JSON schemas simple and flat so they work across providers (Deepseek, Groq, Ollama). Use basic types, enums, and required fields. Avoid deeply nested `anyOf`/`oneOf`, `$ref`, and unusual JSON Schema features. Validate all tool arguments with Pydantic. If the model returns malformed tool arguments, send the validation error back to the model and retry once.
 
 ### 5.3 Problem-type-specific analysis
 
@@ -146,16 +146,16 @@ Create `backend/app/agent/prompts/system.md`. It must instruct the agent to:
 - never fabricate outputs it did not execute;
 - always use the provided tools instead of describing code in plain text.
 
-Keep the system prompt concise (it is sent on every call and costs tokens on the free tier).
+Keep the system prompt concise (it is sent on every call and costs tokens — and money — every time).
 
-### 5.8 Free-tier resilience
+### 5.8 Cost & rate-limit resilience
 - **Rate limiting:** A per-provider token bucket (requests/min and tokens/min, configurable via env) sits in `LLMClient`. Calls wait for capacity instead of failing.
 - **Graceful degradation:** If all models are rate-limited, the UI shows a clear "Waiting for LLM capacity…" status with a countdown. The session state is preserved and resumes automatically.
-- **Caching:** Cache LLM responses for identical prompts (keyed by a hash of model + messages + tools) in Redis with a TTL, which is useful during development and repeated runs.
+- **Caching:** Cache LLM responses for identical prompts (keyed by a hash of model + messages + tools) in Redis with a TTL, which is useful during development and repeated runs, and avoids paying twice for the same call.
 - **Call budget:** Configurable maximum number of LLM calls per session (`LLM_MAX_CALLS_PER_SESSION`). Show usage in a small indicator in the UI.
-- **Cost budget:** On a paid provider tier, a call-count cap alone doesn't bound spend — a cheap model could stay well under it while an expensive one blows past a dollar limit first. Configurable maximum USD cost per session (`LLM_MAX_COST_PER_SESSION_USD`), computed via LiteLLM's own per-model pricing (never hardcode provider pricing) and checked the same way as the call budget; exceeding either raises the same budget-exceeded condition.
-- **Dev mode:** `LLM_MODEL=mock` uses a deterministic fake LLM for tests and UI development, consuming no quota.
-- **Privacy note:** Free tiers may use prompts to improve provider models. Show a one-line notice on the upload page, and recommend public or non-sensitive datasets.
+- **Cost budget:** A call-count cap alone doesn't bound spend — a cheap model could stay well under it while an expensive one blows past a dollar limit first. Configurable maximum USD cost per session (`LLM_MAX_COST_PER_SESSION_USD`), computed via LiteLLM's own per-model pricing (never hardcode provider pricing) and checked the same way as the call budget; exceeding either raises the same budget-exceeded condition. This is the primary safeguard against a stuck retry loop or runaway session draining the account.
+- **Dev mode:** `LLM_MODEL=mock` uses a deterministic fake LLM for tests and UI development, spending nothing.
+- **Privacy note:** Prompts and data sent to any third-party LLM provider are subject to that provider's own data-retention/training-use policy, whether the plan is free or paid — check it before sending anything sensitive. Show a one-line notice on the upload page, and recommend public or non-sensitive datasets.
 
 ---
 
@@ -230,7 +230,7 @@ S3_ENDPOINT=
 S3_ACCESS_KEY=
 S3_SECRET_KEY=
 ```
-Rate limit defaults are placeholders. Add a comment telling me to set them from my provider's current free-tier limits.
+Rate limit defaults are placeholders. Add a comment telling me to set them from my provider's current plan limits (its dashboard — whether the plan is free or paid).
 
 ---
 
@@ -239,7 +239,7 @@ Rate limit defaults are placeholders. Add a comment telling me to set them from 
 - Unit tests for the file loaders, profile builder, analysis templates, notebook builder, tool schemas, leakage heuristics, and `LLMClient` (retry, backoff, fallback, rate limiter, cache, using mocked responses).
 - Integration tests for the kernel manager (execute, timeout, crash recovery).
 - Agent tests use `LLM_MODEL=mock` for deterministic flows. **CI must never call a real LLM.**
-- **Evaluation suite (run manually, uses real free-tier LLM):** Run the full agent on benchmark datasets and assert that problem type detection is correct, the exported notebook runs end to end, and known issues are flagged. Record LLM calls and tokens per dataset:
+- **Evaluation suite (run manually, uses a real paid LLM call — costs money, run deliberately):** Run the full agent on benchmark datasets and assert that problem type detection is correct, the exported notebook runs end to end, and known issues are flagged. Record LLM calls, tokens, and cost per dataset:
   - Titanic (classification, missing values, leakage-prone columns)
   - California Housing (regression)
   - Credit card fraud sample (heavy imbalance)
@@ -285,12 +285,12 @@ datapilot/
 - **Phase 0: Scaffold.** Repo structure, Docker Compose (Postgres, Redis, MinIO, backend, frontend), CI, linting, `CLAUDE.md`, `.env.example`, health endpoint, basic frontend shell.
 - **Phase 1: Upload & profiling.** File loaders for all formats, session creation, `DatasetProfile`, preview table, and data quality score in the UI. No LLM yet.
 - **Phase 2: Sandboxed execution + notebook.** Kernel image, kernel manager, `run_code`, notebook builder, live notebook panel, `.ipynb` export, fresh-kernel validation. Build the first analysis templates and run them without the LLM.
-- **Phase 3: LLM client + agent core.** `LLMClient` (LiteLLM, Gemini primary, fallback, retries, rate limiter, cache, mock mode), a small script to verify my Gemini key and tool calling works, then the LangGraph graph with ingest → understand → plan → execute loop, SSE streaming, insight cards, error self-correction, and the LLM status indicator.
+- **Phase 3: LLM client + agent core.** `LLMClient` (LiteLLM, configurable primary/fallback via `LLM_MODEL`/`LLM_FALLBACKS`, retries, rate limiter, cache, mock mode), a small script to verify my provider key and tool calling works, then the LangGraph graph with ingest → understand → plan → execute loop, SSE streaming, insight cards, error self-correction, and the LLM status indicator.
 - **Phase 4: Human-in-the-loop.** Interrupts, decision cards, plan editing, Decisions panel, auto-decide toggle, revert-to-cell.
 - **Phase 5: Problem-type modules.** Classification, regression, clustering, and time series analysis templates; leakage heuristics; Plotly specs.
 - **Phase 6: Feature engineering & baseline.** Pipeline builder, train/test split logic, baseline model, SHAP, pipeline export.
 - **Phase 7: Q&A.** Cell references, grounded answers, exploratory cells, expertise levels.
-- **Phase 8: Hardening.** Auth, API rate limits, resource limits, crash recovery, HTML report export, evaluation suite, Playwright end-to-end test, README with screenshots, an architecture diagram, and setup instructions for getting a free Gemini API key.
+- **Phase 8: Hardening.** Auth, API rate limits, resource limits, crash recovery, HTML report export, evaluation suite, Playwright end-to-end test, README with screenshots, an architecture diagram, and setup instructions for getting an API key from the configured LLM provider.
 
 ---
 
@@ -302,7 +302,7 @@ datapilot/
 - Write tests alongside features. Do not mark a phase complete with failing tests.
 - Keep `CLAUDE.md` updated with commands (run, test, lint, migrate) and key conventions.
 - Do not add libraries outside this spec without asking.
-- Do not use any paid LLM API. If a feature seems to require one, ask me first.
+- A paid LLM API is in use (DeepSeek) — every design decision should still minimize calls/tokens to control cost (§5.5/§5.8), and the session-level cost budget (`LLM_MAX_COST_PER_SESSION_USD`) must be respected. Ask me first before adding any other paid API dependency.
 - When unsure about a requirement, ask. When you make an assumption, state it in your phase summary.
 
 Begin with **Phase 0** only.
