@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user, get_owned_session
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.core.rate_limit import rate_limit
 from app.core.storage import StorageBackend, get_storage_backend
 from app.data.loaders import (
     FileParseError,
@@ -21,6 +23,7 @@ from app.data.loaders import (
 )
 from app.data.profiling import build_profile, rows_to_json_safe
 from app.models.session import FileType, SessionStatus, UploadSession
+from app.models.user import User
 from app.schemas.dataset import DatasetProfile
 from app.schemas.session import (
     PreviewResponse,
@@ -30,7 +33,7 @@ from app.schemas.session import (
     SheetSelectionRequest,
 )
 
-router = APIRouter(prefix="/sessions", tags=["sessions"])
+router = APIRouter(prefix="/sessions", tags=["sessions"], dependencies=[Depends(rate_limit)])
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -76,19 +79,13 @@ def _ingest(
     return result, profile, preview_rows
 
 
-async def _get_session_or_404(session_id: str, db: AsyncSession) -> UploadSession:
-    obj = await db.get(UploadSession, session_id)
-    if obj is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return obj
-
-
 @router.post("", response_model=SessionDetail, status_code=201)
 async def create_session(
     file: UploadFile,
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     settings: Annotated[Settings, Depends(get_settings)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> UploadSession:
     if not file.filename:
         raise HTTPException(status_code=400, detail="A filename is required.")
@@ -104,6 +101,7 @@ async def create_session(
 
     safe_name = _sanitize_filename(file.filename)
     session = UploadSession(
+        user_id=user.id,
         original_filename=safe_name,
         storage_key="",
         file_type=file_type,
@@ -145,13 +143,12 @@ async def create_session(
 
 @router.post("/{session_id}/sheet", response_model=SessionDetail)
 async def select_sheet(
-    session_id: str,
     body: SheetSelectionRequest,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> UploadSession:
-    session = await _get_session_or_404(session_id, db)
     if session.status != SessionStatus.NEEDS_SHEET_SELECTION:
         raise HTTPException(status_code=409, detail="Session is not awaiting a sheet selection.")
     if not session.sheet_names or body.sheet_name not in session.sheet_names:
@@ -178,8 +175,8 @@ async def select_sheet(
 
 @router.post("/{session_id}/settings", response_model=SessionDetail)
 async def update_session_settings(
-    session_id: str,
     body: SessionSettingsRequest,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadSession:
     """MASTER_PROMPT.md §5.4/§7: the per-session "let the agent decide" toggle, and (Phase 7)
@@ -187,7 +184,6 @@ async def update_session_settings(
     *after* this call — one already paused and awaiting the user keeps waiting for an explicit
     answer rather than silently auto-resolving. Both fields are optional so either can be set
     independently."""
-    session = await _get_session_or_404(session_id, db)
     if body.auto_decide is not None:
         session.auto_decide = body.auto_decide
     if body.expertise_level is not None:
@@ -197,26 +193,31 @@ async def update_session_settings(
 
 
 @router.get("", response_model=list[SessionSummary])
-async def list_sessions(db: Annotated[AsyncSession, Depends(get_db)]) -> list[UploadSession]:
-    result = await db.execute(select(UploadSession).order_by(UploadSession.created_at.desc()))
+async def list_sessions(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[UploadSession]:
+    result = await db.execute(
+        select(UploadSession)
+        .where(UploadSession.user_id == user.id)
+        .order_by(UploadSession.created_at.desc())
+    )
     return list(result.scalars().all())
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
 async def get_session(
-    session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
+    session: Annotated[UploadSession, Depends(get_owned_session)],
 ) -> UploadSession:
-    return await _get_session_or_404(session_id, db)
+    return session
 
 
 @router.get("/{session_id}/preview", response_model=PreviewResponse)
 async def preview_session(
-    session_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     offset: int = 0,
     limit: int = 100,
 ) -> PreviewResponse:
-    session = await _get_session_or_404(session_id, db)
     rows = session.preview_rows or []
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
@@ -227,11 +228,10 @@ async def preview_session(
 
 @router.delete("/{session_id}", status_code=204)
 async def delete_session(
-    session_id: str,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ) -> None:
-    session = await _get_session_or_404(session_id, db)
     if session.storage_key:
         storage.delete(session.storage_key)
     await db.delete(session)

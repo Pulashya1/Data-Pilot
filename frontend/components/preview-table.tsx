@@ -43,9 +43,9 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
     };
   }, [rows, scrollTop]);
 
-  if (error) return <p className="text-sm text-red-500">{error}</p>;
+  if (error) return <p className="text-sm text-critical">{error}</p>;
   if (rows.length === 0)
-    return <p className="text-sm text-neutral-500">No preview rows available.</p>;
+    return <p className="text-sm text-ink-tertiary">No preview rows available.</p>;
 
   return (
     <div>
@@ -53,13 +53,13 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
         ref={containerRef}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
         style={{ height: VIEWPORT_HEIGHT }}
-        className="overflow-auto rounded-lg border border-neutral-200 dark:border-neutral-800"
+        className="styled-scrollbar overflow-auto rounded-lg border border-line"
       >
         <table className="w-full border-collapse text-left text-sm">
-          <thead className="sticky top-0 bg-neutral-100 dark:bg-neutral-900">
+          <thead className="sticky top-0 z-10 bg-surface-2 font-mono text-xs uppercase tracking-wide text-ink-tertiary">
             <tr>
               {columns.map((col) => (
-                <th key={col} className="whitespace-nowrap px-3 py-1.5 font-medium">
+                <th key={col} className="whitespace-nowrap px-3 py-2 font-medium">
                   {col}
                 </th>
               ))}
@@ -75,12 +75,12 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
               <tr
                 key={startIndex + i}
                 style={{ height: ROW_HEIGHT }}
-                className="border-t border-neutral-100 dark:border-neutral-800"
+                className="tabular border-t border-line transition-colors hover:bg-surface-2"
               >
                 {columns.map((col) => (
-                  <td key={col} className="whitespace-nowrap px-3 py-1.5">
+                  <td key={col} className="whitespace-nowrap px-3 py-2 text-ink-secondary">
                     {row[col] === null || row[col] === undefined ? (
-                      <span className="text-neutral-400">—</span>
+                      <span className="text-ink-tertiary">—</span>
                     ) : (
                       String(row[col])
                     )}
@@ -96,7 +96,7 @@ export function PreviewTable({ sessionId, columns }: { sessionId: string; column
           </tbody>
         </table>
       </div>
-      <p className="mt-1 text-xs text-neutral-500">
+      <p className="tabular mt-1.5 text-xs text-ink-tertiary">
         Showing {rows.length.toLocaleString()} of {totalAvailable.toLocaleString()} cached preview
         rows.
       </p>

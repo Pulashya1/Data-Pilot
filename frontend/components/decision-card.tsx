@@ -1,5 +1,6 @@
 "use client";
 
+import { CircleHelp } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { DecisionOut } from "@/types";
@@ -29,10 +30,10 @@ function TargetConfirmationCard({
           disabled={busy}
           onClick={() => onAnswer(option)}
           className={cn(
-            "rounded-md border px-3 py-1.5 text-xs font-medium disabled:opacity-50",
+            "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50",
             option === decision.recommended_option
-              ? "border-blue-400 bg-blue-50 text-blue-800 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200"
-              : "border-neutral-300 dark:border-neutral-700",
+              ? "border-secondary/50 bg-secondary/12 text-secondary-strong hover:bg-secondary/20"
+              : "border-line-strong text-ink-secondary hover:border-line-strong hover:text-ink",
           )}
         >
           {option}
@@ -89,20 +90,21 @@ function PlanApprovalCard({
         {order.map((step, index) => (
           <li
             key={step}
-            className="flex items-center gap-2 rounded-md border border-neutral-200 px-2 py-1 text-xs dark:border-neutral-800"
+            className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5 font-mono text-xs"
           >
             <input
               type="checkbox"
               checked={checked.has(step)}
               onChange={() => toggle(step)}
               disabled={busy}
+              className="accent-secondary"
             />
-            <span className="flex-1">{step}</span>
+            <span className="flex-1 text-ink">{step}</span>
             <button
               type="button"
               disabled={busy || index === 0}
               onClick={() => move(step, -1)}
-              className="disabled:opacity-30"
+              className="text-ink-tertiary transition-colors hover:text-ink disabled:opacity-30"
               aria-label={`Move ${step} up`}
             >
               ↑
@@ -111,7 +113,7 @@ function PlanApprovalCard({
               type="button"
               disabled={busy || index === order.length - 1}
               onClick={() => move(step, 1)}
-              className="disabled:opacity-30"
+              className="text-ink-tertiary transition-colors hover:text-ink disabled:opacity-30"
               aria-label={`Move ${step} down`}
             >
               ↓
@@ -123,7 +125,7 @@ function PlanApprovalCard({
         type="button"
         disabled={busy || selectedSteps.length === 0}
         onClick={() => onAnswer(selectedSteps.join(","))}
-        className="self-start rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+        className="self-start rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-secondary-strong disabled:opacity-50"
       >
         {busy ? "Submitting…" : "Approve plan"}
       </button>
@@ -154,20 +156,21 @@ export function DecisionCard({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-blue-300 bg-blue-50/50 p-4 dark:border-blue-800 dark:bg-blue-950/30">
-      <span className="text-xs font-medium uppercase text-blue-700 dark:text-blue-300">
+    <div className="flex flex-col gap-2.5 rounded-lg border border-secondary/30 bg-secondary/[0.05] p-4">
+      <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-secondary-strong">
+        <CircleHelp size={13} />
         {KIND_LABEL[decision.kind] ?? decision.kind} — awaiting your input
       </span>
-      <p className="text-sm font-medium">{decision.question}</p>
+      <p className="text-sm font-medium text-ink">{decision.question}</p>
       {decision.reasoning && (
-        <p className="text-xs text-neutral-600 dark:text-neutral-400">{decision.reasoning}</p>
+        <p className="text-xs leading-relaxed text-ink-tertiary">{decision.reasoning}</p>
       )}
       {decision.kind === "plan_approval" ? (
         <PlanApprovalCard decision={decision} busy={busy} onAnswer={(o) => void answer(o)} />
       ) : (
         <TargetConfirmationCard decision={decision} busy={busy} onAnswer={(o) => void answer(o)} />
       )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-critical">{error}</p>}
     </div>
   );
 }

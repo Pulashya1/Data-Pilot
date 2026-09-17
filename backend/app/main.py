@@ -16,6 +16,7 @@ if sys.platform == "win32":
 
 from app.agent.checkpoint import start_checkpointer, stop_checkpointer
 from app.api.agent import router as agent_router
+from app.api.auth import router as auth_router
 from app.api.health import router as health_router
 from app.api.notebook import router as notebook_router
 from app.api.sessions import router as sessions_router
@@ -51,6 +52,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(notebook_router)
 app.include_router(agent_router)

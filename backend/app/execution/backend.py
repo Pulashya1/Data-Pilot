@@ -14,6 +14,13 @@ class KernelStartupError(RuntimeError):
     """Raised when a kernel fails to start or become ready in time."""
 
 
+class KernelComputeBudgetExceededError(RuntimeError):
+    """Raised by `KernelManager.run_cell` (MASTER_PROMPT.md §9 "per-session total compute
+    limits") when a session has already used its cumulative kernel execution time budget
+    (`Settings.kernel_session_compute_budget_seconds`) — independent of the per-cell timeout,
+    which only bounds a single cell."""
+
+
 @dataclass
 class KernelHandle:
     """An opaque handle to a running kernel. `state` is backend-private."""

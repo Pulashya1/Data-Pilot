@@ -1,29 +1,48 @@
+import { SEVERITY_CONFIG } from "@/lib/severity";
 import { cn } from "@/lib/utils";
-import type { InsightEvent, InsightSeverity } from "@/types";
+import type { InsightEvent } from "@/types";
 
-const SEVERITY_STYLE: Record<InsightSeverity, string> = {
-  info: "border-neutral-200 bg-neutral-50 text-neutral-700 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300",
-  warning:
-    "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200",
-  critical:
-    "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200",
-};
+const TONE_CLASSES = {
+  info: "border-l-info bg-info/[0.06] text-ink",
+  warning: "border-l-warning bg-warning/[0.07] text-ink",
+  critical: "border-l-critical bg-critical/[0.07] text-ink",
+} as const;
+
+const ICON_TONE_CLASSES = {
+  info: "text-info",
+  warning: "text-warning",
+  critical: "text-critical",
+} as const;
 
 export function InsightFeed({ insights }: { insights: InsightEvent[] }) {
   if (insights.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium">Insights</h2>
+      <h3 className="font-display text-xs font-medium tracking-tight text-ink-secondary">
+        Insights
+      </h3>
       <ul className="flex flex-col gap-2">
-        {insights.map((insight, index) => (
-          <li
-            key={index}
-            className={cn("rounded-md border px-3 py-2 text-sm", SEVERITY_STYLE[insight.severity])}
-          >
-            {insight.text}
-          </li>
-        ))}
+        {insights.map((insight, index) => {
+          const config = SEVERITY_CONFIG[insight.severity];
+          const Icon = config.icon;
+          return (
+            <li
+              key={index}
+              className={cn(
+                "flex items-start gap-2.5 rounded-md border-l-2 py-2 pl-3 pr-3 text-sm leading-relaxed",
+                TONE_CLASSES[config.tone],
+              )}
+            >
+              <Icon
+                size={15}
+                className={cn("mt-0.5 shrink-0", ICON_TONE_CLASSES[config.tone])}
+                aria-hidden="true"
+              />
+              <span>{insight.text}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

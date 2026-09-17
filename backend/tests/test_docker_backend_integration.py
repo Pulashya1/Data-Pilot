@@ -13,7 +13,9 @@ Skips automatically if Docker isn't reachable or the images aren't built, so it'
 leave in the default collection.
 """
 
+import asyncio
 import contextlib
+import time
 from collections.abc import AsyncGenerator
 
 import docker
@@ -125,3 +127,26 @@ async def test_is_alive_and_crash_recovery(
     client = docker.from_env()
     client.containers.get(handle.state["kernel_container_id"]).kill()
     assert await backend.is_alive(handle) is False
+
+
+async def test_kernel_killed_mid_execution_is_detected_quickly(
+    backend: DockerJupyterBackend, handle: KernelHandle
+) -> None:
+    """Phase 8 hardening: a kernel killed mid-cell (e.g. OOM) must be reported as a crash well
+    before the full per-cell timeout elapses, via `_execute_sync`'s periodic liveness check —
+    not misreported as a plain timeout only once the whole 30s budget has been burned."""
+    client = docker.from_env()
+
+    async def _kill_soon() -> None:
+        await asyncio.sleep(1.0)
+        client.containers.get(handle.state["kernel_container_id"]).kill()
+
+    kill_task = asyncio.create_task(_kill_soon())
+    started = time.monotonic()
+    result = await backend.execute(handle, "import time\ntime.sleep(30)", timeout=30)
+    elapsed = time.monotonic() - started
+    await kill_task
+
+    assert result.status == "error"
+    assert "crashed" in (result.error_message or "").lower()
+    assert elapsed < 10

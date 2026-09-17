@@ -22,12 +22,22 @@ TEST_DATABASE_URL = os.environ.get(
 # at the test database too, and that has to happen before `app.core.config` is first imported
 # anywhere (Settings is `@lru_cache`d).
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# MASTER_PROMPT.md §10/§13: "CI must never call a real LLM" / "Agent tests use LLM_MODEL=mock".
+# `Settings.llm_model`'s Python default is already "mock", but that default only applies when
+# the env var is unset — a developer's shell commonly exports a real `LLM_MODEL` (+ provider API
+# key) for `scripts/verify_llm.py`/manual use, and pydantic-settings prefers a real env var over
+# both the field default *and* `.env`. Force it here, the same way `DATABASE_URL` is forced
+# above, so the default `pytest` run is hermetic and never bills a real provider regardless of
+# the environment it happens to run in.
+os.environ["LLM_MODEL"] = "mock"
 
 from app.agent.events import get_event_bus  # noqa: E402
 from app.agent.llm import get_llm_client  # noqa: E402
 from app.agent.runner import AgentRunner, get_agent_runner  # noqa: E402
+from app.api.deps import get_current_user  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import Base, get_db  # noqa: E402
+from app.core.redis import get_redis_client  # noqa: E402
 from app.core.storage import StorageBackend, get_storage_backend  # noqa: E402
 from app.execution.kernel_manager import (  # noqa: E402
     KernelManager,
@@ -39,7 +49,8 @@ from app.models.chat import ChatMessage  # noqa: E402
 from app.models.decision import Decision  # noqa: E402
 from app.models.notebook import NotebookCell  # noqa: E402
 from app.models.session import UploadSession  # noqa: E402
-from tests.fakes import FakeExecutionBackend  # noqa: E402
+from app.models.user import LoginToken, User  # noqa: E402
+from tests.fakes import FakeExecutionBackend, FakeRedis  # noqa: E402
 
 # NullPool: asyncpg connections are bound to the event loop that created them,
 # and pytest-asyncio gives each test its own loop. Pooling would reuse a
@@ -89,6 +100,8 @@ async def _clean_sessions_table() -> AsyncGenerator[None]:
         await session.execute(delete(NotebookCell))
         await session.execute(delete(Decision))
         await session.execute(delete(UploadSession))
+        await session.execute(delete(LoginToken))
+        await session.execute(delete(User))
         await session.commit()
 
 
@@ -114,18 +127,37 @@ def fake_execution_backend() -> FakeExecutionBackend:
 
 
 @pytest.fixture
+def fake_redis() -> FakeRedis:
+    return FakeRedis()
+
+
+@pytest.fixture
 def kernel_manager(fake_execution_backend: FakeExecutionBackend) -> KernelManager:
     return KernelManager(
         fake_execution_backend, idle_timeout_minutes=30, default_cell_timeout_seconds=30
     )
 
 
-@pytest.fixture
-def client(
+@pytest_asyncio.fixture
+async def test_user() -> User:
+    """Auth (Phase 8): every session-scoped API route now requires `get_current_user`. Most
+    tests don't care about auth itself, so the `client` fixture below overrides it to this one
+    persisted user for free — tests that exercise the real magic-link flow or cross-user
+    isolation use `raw_client` instead (which leaves that override out)."""
+    async with _TestSessionLocal() as session:
+        user = User(email="test-user@example.com")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+
+def _apply_common_overrides(
     fake_storage: FakeStorageBackend,
     fake_execution_backend: FakeExecutionBackend,
     kernel_manager: KernelManager,
-) -> Generator[TestClient]:
+    fake_redis: FakeRedis,
+) -> None:
     def _override_get_storage() -> StorageBackend:
         return fake_storage
 
@@ -133,6 +165,7 @@ def client(
     app.dependency_overrides[get_storage_backend] = _override_get_storage
     app.dependency_overrides[get_execution_backend] = lambda: fake_execution_backend
     app.dependency_overrides[get_kernel_manager] = lambda: kernel_manager
+    app.dependency_overrides[get_redis_client] = lambda: fake_redis
     # `AgentRunner` (app/agent/runner.py) isn't itself request-scoped — it resolves its
     # dependencies once, eagerly, when first constructed — so overriding the individual
     # `get_storage_backend`/`get_execution_backend`/`get_kernel_manager` FastAPI dependencies
@@ -146,6 +179,33 @@ def client(
         get_settings(),
         session_maker=_TestSessionLocal,
     )
+
+
+@pytest.fixture
+def client(
+    fake_storage: FakeStorageBackend,
+    fake_execution_backend: FakeExecutionBackend,
+    kernel_manager: KernelManager,
+    fake_redis: FakeRedis,
+    test_user: User,
+) -> Generator[TestClient]:
+    _apply_common_overrides(fake_storage, fake_execution_backend, kernel_manager, fake_redis)
+    app.dependency_overrides[get_current_user] = lambda: test_user
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def raw_client(
+    fake_storage: FakeStorageBackend,
+    fake_execution_backend: FakeExecutionBackend,
+    kernel_manager: KernelManager,
+    fake_redis: FakeRedis,
+) -> Generator[TestClient]:
+    """Like `client`, but leaves `get_current_user` un-overridden, for tests that exercise the
+    real magic-link login flow (`tests/test_auth_api.py`) or cross-user access control."""
+    _apply_common_overrides(fake_storage, fake_execution_backend, kernel_manager, fake_redis)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

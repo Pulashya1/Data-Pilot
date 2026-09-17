@@ -130,6 +130,7 @@ export interface TemplateInfo {
 
 export interface KernelStatusOut {
   status: "stopped" | "running";
+  compute_seconds_used: number;
 }
 
 // Agent run (Phase 3, MASTER_PROMPT.md §5, §7, §8, §12)
@@ -251,4 +252,16 @@ export interface ChatMessageOut {
   exploratory_cell_id: string | null;
   degraded: boolean;
   created_at: string;
+}
+
+// Auth (Phase 8, MASTER_PROMPT.md §9, §12)
+
+export interface AuthUser {
+  id: string;
+  email: string;
+}
+
+export interface RequestLinkResponse {
+  detail: string;
+  dev_login_url: string | null;
 }

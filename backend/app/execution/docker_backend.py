@@ -299,6 +299,13 @@ class DockerJupyterBackend:
         outputs: list[dict[str, Any]] = []
         error_message: str | None = None
         deadline = time.monotonic() + timeout
+        # MASTER_PROMPT.md §9/§12 Phase 8 crash-recovery hardening: without this, a kernel
+        # killed mid-cell (e.g. by its own memory limit) would otherwise only be noticed once
+        # the *full* per-cell timeout elapses (no more iopub messages ever arrive, so the loop
+        # just runs out the clock) and get misreported as a plain timeout. Polling container
+        # liveness only on an idle wait, and only every few seconds, catches this promptly
+        # without adding a Docker API call to the common case of a message arriving quickly.
+        next_liveness_check = time.monotonic() + 3.0
 
         while True:
             remaining = deadline - time.monotonic()
@@ -307,6 +314,19 @@ class DockerJupyterBackend:
             try:
                 msg = client.get_iopub_msg(timeout=min(remaining, 1.0))
             except Empty:
+                now = time.monotonic()
+                if now >= next_liveness_check:
+                    next_liveness_check = now + 3.0
+                    if not self._is_alive_sync(handle):
+                        return (
+                            "error",
+                            outputs,
+                            None,
+                            "The kernel process crashed while running this cell (often the "
+                            "container's memory limit). It will be restarted automatically on "
+                            "the next run.",
+                            False,
+                        )
                 continue
             if msg["parent_header"].get("msg_id") != msg_id:
                 continue

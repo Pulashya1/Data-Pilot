@@ -41,6 +41,7 @@ from app.agent.deps import NodeDeps
 from app.agent.llm import LLMBudgetExceededError, LLMUnavailableError
 from app.agent.tools.schemas import AnswerQuestion
 from app.core.logging import get_logger
+from app.execution.backend import KernelComputeBudgetExceededError, KernelStartupError
 from app.models.chat import ChatMessage, ChatRole
 from app.models.decision import Decision
 from app.models.notebook import CellStatus, CellType, NotebookCell
@@ -177,17 +178,25 @@ async def answer_question(deps: NodeDeps, session: UploadSession, content: str) 
             on_start = make_on_start_hook(
                 session, deps.db, deps.storage, deps.backend, deps.settings
             )
-            exec_result = await deps.kernel_manager.run_cell(
-                session.id, result.code, on_start=on_start
-            )
-            builder.apply_execution_result(cell, exec_result)
-            await deps.db.flush()
-            exploratory_cell_id = cell.id
-            if cell.status == CellStatus.ERROR:
-                answer_text += (
-                    f"\n\n(Tried to run new code to answer this, but it failed: "
-                    f"{cell.error_message})"
+            try:
+                exec_result = await deps.kernel_manager.run_cell(
+                    session.id, result.code, on_start=on_start
                 )
+            except (KernelStartupError, KernelComputeBudgetExceededError) as exc:
+                cell.status = CellStatus.ERROR
+                cell.error_message = str(exc)
+                await deps.db.flush()
+                exploratory_cell_id = cell.id
+                answer_text += f"\n\n(Tried to run new code to answer this, but couldn't: {exc})"
+            else:
+                builder.apply_execution_result(cell, exec_result)
+                await deps.db.flush()
+                exploratory_cell_id = cell.id
+                if cell.status == CellStatus.ERROR:
+                    answer_text += (
+                        f"\n\n(Tried to run new code to answer this, but it failed: "
+                        f"{cell.error_message})"
+                    )
 
     assistant_message = ChatMessage(
         session_id=session.id,

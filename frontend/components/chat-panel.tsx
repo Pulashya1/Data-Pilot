@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ArrowUp, MessageCircleQuestion, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { SignalMeter } from "@/components/ui/signal-meter";
 import { ApiError, askQuestion, getMessages } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { ChatMessageOut } from "@/types";
@@ -9,15 +11,18 @@ export function ChatPanel({
   sessionId,
   prefill,
   onPrefillConsumed,
+  className,
 }: {
   sessionId: string;
   prefill?: string | null;
   onPrefillConsumed?: () => void;
+  className?: string;
 }) {
   const [messages, setMessages] = useState<ChatMessageOut[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getMessages(sessionId)
@@ -30,6 +35,11 @@ export function ChatPanel({
     setInput((prev) => (prev ? `${prev} ${prefill} ` : `${prefill} `));
     onPrefillConsumed?.();
   }, [prefill, onPrefillConsumed]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages, sending]);
 
   const send = async () => {
     const content = input.trim();
@@ -48,40 +58,63 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-      <h2 className="text-sm font-medium">Ask about your data</h2>
-      <div className="flex max-h-96 flex-col gap-2 overflow-y-auto">
-        {messages.length === 0 && (
-          <p className="text-xs text-neutral-500">
-            Ask about the dataset, an insight, a decision, or a specific cell (click
-            &quot;Ask about this cell&quot; in the notebook below).
-          </p>
+    <div
+      className={cn(
+        "flex flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-floating",
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <Sparkles size={14} className="text-accent" />
+        <h2 className="font-display text-sm font-medium tracking-tight text-ink">
+          Ask about your data
+        </h2>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className="styled-scrollbar flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3"
+      >
+        {messages.length === 0 && !sending && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-8 text-center">
+            <MessageCircleQuestion size={22} className="text-ink-tertiary" />
+            <p className="max-w-[220px] text-xs leading-relaxed text-ink-tertiary">
+              Ask about the dataset, an insight, a decision, or a specific cell (click &quot;Ask
+              about this cell&quot; in the notebook).
+            </p>
+          </div>
         )}
         {messages.map((message) => (
           <div
             key={message.id}
             className={cn(
-              "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+              "animate-fade-in max-w-[88%] rounded-lg px-3 py-2 text-sm leading-relaxed",
               message.role === "user"
-                ? "self-end bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                : "self-start bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100",
+                ? "self-end bg-accent/15 text-ink"
+                : "self-start border border-line bg-surface-2 text-ink",
             )}
           >
             <p className="whitespace-pre-wrap">{message.content}</p>
             {message.exploratory_cell_id && (
-              <p className="mt-1 text-[10px] uppercase text-neutral-500 dark:text-neutral-400">
+              <p className="mt-1.5 border-t border-line-strong/50 pt-1 text-[10px] uppercase tracking-wide text-ink-tertiary">
                 Ran a new exploratory cell to answer this
               </p>
             )}
             {message.degraded && (
-              <p className="mt-1 text-[10px] uppercase text-amber-600 dark:text-amber-400">
+              <p className="mt-1.5 text-[10px] uppercase tracking-wide text-warning">
                 Answered without the LLM (unavailable/over budget)
               </p>
             )}
           </div>
         ))}
+        {sending && (
+          <div className="animate-fade-in flex max-w-[88%] items-center gap-2 self-start rounded-lg border border-line bg-surface-2 px-3 py-2.5">
+            <SignalMeter />
+          </div>
+        )}
       </div>
-      <div className="flex gap-2">
+
+      <div className="flex items-center gap-2 border-t border-line p-3">
         <input
           type="text"
           value={input}
@@ -94,18 +127,19 @@ export function ChatPanel({
           }}
           placeholder="Ask a question…"
           disabled={sending}
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950"
+          className="flex-1 rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-ink placeholder:text-ink-tertiary transition-colors focus:border-accent disabled:opacity-50"
         />
         <button
           type="button"
+          aria-label="Ask"
           onClick={() => void send()}
           disabled={sending || !input.trim()}
-          className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-40"
         >
-          {sending ? "Asking…" : "Ask"}
+          <ArrowUp size={16} />
         </button>
       </div>
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="px-4 pb-3 text-xs text-critical">{error}</p>}
     </div>
   );
 }

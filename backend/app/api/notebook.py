@@ -13,32 +13,29 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.templates.registry import TEMPLATES
+from app.api.deps import get_ready_owned_session
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.core.rate_limit import rate_limit
 from app.core.storage import StorageBackend, get_storage_backend
-from app.execution.backend import ExecutionBackend, KernelStartupError
+from app.execution.backend import (
+    ExecutionBackend,
+    KernelComputeBudgetExceededError,
+    KernelStartupError,
+)
 from app.execution.kernel_manager import (
     KernelManager,
     get_execution_backend,
     get_kernel_manager,
 )
 from app.models.notebook import CellType, NotebookCell
-from app.models.session import AgentStatus, SessionStatus, UploadSession
+from app.models.session import AgentStatus, UploadSession
 from app.notebook import builder
-from app.notebook.export import build_export_zip, read_kernel_requirements
+from app.notebook.export import build_export_zip, read_kernel_requirements, render_notebook_html
 from app.notebook.seed import render_and_run_template_step, run_pending_seed_cells
 from app.schemas.notebook import KernelStatusOut, NotebookCellOut, TemplateInfo
 
-router = APIRouter(tags=["notebook"])
-
-
-async def _get_ready_session_or_404(session_id: str, db: AsyncSession) -> UploadSession:
-    session = await db.get(UploadSession, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.status != SessionStatus.READY or session.profile is None:
-        raise HTTPException(status_code=409, detail="Session is not ready for analysis")
-    return session
+router = APIRouter(tags=["notebook"], dependencies=[Depends(rate_limit)])
 
 
 @router.get("/templates", response_model=list[TemplateInfo])
@@ -51,10 +48,10 @@ async def list_templates() -> list[TemplateInfo]:
 
 @router.get("/sessions/{session_id}/notebook", response_model=list[NotebookCellOut])
 async def get_notebook(
-    session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[NotebookCell]:
-    await _get_ready_session_or_404(session_id, db)
-    return await builder.get_cells(db, session_id)
+    return await builder.get_cells(db, session.id)
 
 
 @router.post(
@@ -62,8 +59,8 @@ async def get_notebook(
     response_model=list[NotebookCellOut],
 )
 async def revert_to_cell(
-    session_id: str,
     cell_id: str,
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     kernel_manager: Annotated[KernelManager, Depends(get_kernel_manager)],
 ) -> list[NotebookCell]:
@@ -72,7 +69,6 @@ async def revert_to_cell(
     cells (`app.notebook.seed.make_on_start_hook` replays every successful cell on kernel
     start). Only usable between agent runs — reverting mid-run would race the agent's own
     writes to the notebook and the kernel it's actively using."""
-    session = await _get_ready_session_or_404(session_id, db)
     if session.agent_status in (AgentStatus.RUNNING, AgentStatus.WAITING_DECISION):
         raise HTTPException(
             status_code=409,
@@ -80,27 +76,28 @@ async def revert_to_cell(
         )
 
     target = await db.get(NotebookCell, cell_id)
-    if target is None or target.session_id != session_id:
+    if target is None or target.session_id != session.id:
         raise HTTPException(status_code=404, detail="Notebook cell not found")
 
     await db.execute(
         delete(NotebookCell).where(
-            NotebookCell.session_id == session_id, NotebookCell.position > target.position
+            NotebookCell.session_id == session.id, NotebookCell.position > target.position
         )
     )
-    await kernel_manager.shutdown_session(session_id)
+    await kernel_manager.shutdown_session(session.id)
     await db.commit()
-    return await builder.get_cells(db, session_id)
+    return await builder.get_cells(db, session.id)
 
 
 @router.get("/sessions/{session_id}/kernel/status", response_model=KernelStatusOut)
 async def kernel_status(
-    session_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
     kernel_manager: Annotated[KernelManager, Depends(get_kernel_manager)],
 ) -> KernelStatusOut:
-    await _get_ready_session_or_404(session_id, db)
-    return KernelStatusOut(status=kernel_manager.kernel_status(session_id))
+    return KernelStatusOut(
+        status=kernel_manager.kernel_status(session.id),
+        compute_seconds_used=kernel_manager.compute_seconds_used(session.id),
+    )
 
 
 @router.post(
@@ -108,15 +105,14 @@ async def kernel_status(
     response_model=list[NotebookCellOut],
 )
 async def run_template(
-    session_id: str,
     template_key: str,
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     backend: Annotated[ExecutionBackend, Depends(get_execution_backend)],
     kernel_manager: Annotated[KernelManager, Depends(get_kernel_manager)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> list[NotebookCell]:
-    session = await _get_ready_session_or_404(session_id, db)
     template = TEMPLATES.get(template_key)
     if template is None:
         raise HTTPException(status_code=404, detail=f"Unknown template '{template_key}'")
@@ -131,6 +127,8 @@ async def run_template(
         )
     except KernelStartupError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KernelComputeBudgetExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     await db.commit()
     return new_cells
@@ -138,17 +136,26 @@ async def run_template(
 
 @router.post("/sessions/{session_id}/notebook/export")
 async def export_notebook(
-    session_id: str,
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     backend: Annotated[ExecutionBackend, Depends(get_execution_backend)],
     settings: Annotated[Settings, Depends(get_settings)],
+    format: str = "zip",  # noqa: A002 - matches MASTER_PROMPT.md §8's export(format=...) API
     include_data: bool = False,
     include_pipeline: bool = False,
     include_exploratory: bool = False,
 ) -> Response:
-    session = await _get_ready_session_or_404(session_id, db)
-    all_cells = await builder.get_cells(db, session_id)
+    """`format=zip` (default) is the `.ipynb` + `requirements.txt` (+ optional data/pipeline)
+    bundle from Phase 2/6. `format=html` (Phase 8, MASTER_PROMPT.md §12) is a single
+    self-contained HTML report instead — same fresh-kernel validation, no zip. Both formats
+    share one endpoint/flag set rather than MASTER_PROMPT.md §8's literal
+    `format=ipynb|html|clean_csv|pipeline`, continuing the flag-based pattern
+    `include_pipeline` established in Phase 6 (see CLAUDE.md)."""
+    if format not in ("zip", "html"):
+        raise HTTPException(status_code=400, detail="format must be 'zip' or 'html'.")
+
+    all_cells = await builder.get_cells(db, session.id)
     # MASTER_PROMPT.md §6: exploratory Q&A cells (Phase 7, `NotebookCell.is_exploratory`) are
     # excluded by default, toggled in with `include_exploratory=true`. Excluded up front, before
     # the fresh-kernel validation below, so a broken exploratory cell never blocks export of an
@@ -181,6 +188,15 @@ async def export_notebook(
     finally:
         await backend.shutdown(handle)
 
+    stem = session.original_filename.rsplit(".", 1)[0]
+    if format == "html":
+        html_text = render_notebook_html(session, cells)
+        return Response(
+            content=html_text,
+            media_type="text/html",
+            headers={"Content-Disposition": f'attachment; filename="{stem}_datapilot_report.html"'},
+        )
+
     pipeline_bytes = (
         storage.download(session.pipeline_storage_key)
         if include_pipeline and session.pipeline_storage_key
@@ -194,9 +210,8 @@ async def export_notebook(
         dataset_bytes=dataset_bytes if include_data else None,
         pipeline_bytes=pipeline_bytes,
     )
-    filename = f"{session.original_filename.rsplit('.', 1)[0]}_datapilot_export.zip"
     return Response(
         content=zip_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{stem}_datapilot_export.zip"'},
     )

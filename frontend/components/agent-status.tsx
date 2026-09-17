@@ -1,20 +1,21 @@
-import { cn } from "@/lib/utils";
+import { Check, CircleDot, Hourglass, TriangleAlert } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { SignalMeter } from "@/components/ui/signal-meter";
 import type { AgentStatus, LLMStatusEvent } from "@/types";
 
-const STATUS_LABEL: Record<AgentStatus, string> = {
-  not_started: "Not started",
-  running: "Running",
-  waiting_decision: "Waiting for you",
-  done: "Done",
-  error: "Error",
-};
-
-const STATUS_COLOR: Record<AgentStatus, string> = {
-  not_started: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
-  running: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  waiting_decision: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  error: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+const STATUS_CONFIG: Record<
+  AgentStatus,
+  {
+    label: string;
+    tone: "neutral" | "accent" | "warning" | "success" | "critical";
+    icon: typeof Check;
+  }
+> = {
+  not_started: { label: "Not started", tone: "neutral", icon: CircleDot },
+  running: { label: "Running", tone: "accent", icon: CircleDot },
+  waiting_decision: { label: "Waiting for you", tone: "warning", icon: Hourglass },
+  done: { label: "Done", tone: "success", icon: Check },
+  error: { label: "Error", tone: "critical", icon: TriangleAlert },
 };
 
 export function AgentStatusBar({
@@ -28,25 +29,21 @@ export function AgentStatusBar({
   callsUsed: number;
   callsBudget: number;
 }) {
+  const status = STATUS_CONFIG[agentStatus];
+  const StatusIcon = status.icon;
+
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 p-3 text-xs dark:border-neutral-800">
-      <span
-        className={cn("rounded-full px-2 py-0.5 font-medium uppercase", STATUS_COLOR[agentStatus])}
-      >
-        agent: {STATUS_LABEL[agentStatus]}
-      </span>
+    <div className="flex flex-wrap items-center gap-2.5 rounded-md border border-line bg-surface-2 px-3 py-2 text-xs">
+      <Badge tone={status.tone} className="gap-1">
+        <StatusIcon size={11} className={agentStatus === "running" ? "animate-pulse" : ""} />
+        {status.label}
+      </Badge>
+      {agentStatus === "running" && llmStatus === "calling" && <SignalMeter label="Calling LLM" />}
       {llmStatus === "waiting_for_capacity" && (
-        <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-          Waiting for LLM capacity…
-        </span>
+        <Badge tone="warning">Waiting for LLM capacity…</Badge>
       )}
-      {llmStatus === "calling" && (
-        <span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-          Calling LLM…
-        </span>
-      )}
-      <span className="text-neutral-500">
-        LLM calls: {callsUsed} / {callsBudget}
+      <span className="tabular ml-auto text-ink-tertiary">
+        LLM calls <span className="text-ink-secondary">{callsUsed}</span> / {callsBudget}
       </span>
     </div>
   );

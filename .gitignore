@@ -18,6 +18,11 @@ out/
 frontend/coverage/
 *.tsbuildinfo
 
+# Playwright (Phase 8 e2e test)
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright/.cache/
+
 # OS
 .DS_Store
 Thumbs.db

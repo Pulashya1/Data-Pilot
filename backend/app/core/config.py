@@ -62,6 +62,36 @@ class Settings(BaseSettings):
     # Q&A (Phase 7, MASTER_PROMPT.md §5.5/§5.6)
     qa_max_output_chars: int = 2000
 
+    # Auth (Phase 8, MASTER_PROMPT.md §9, §12): email magic-link login. `auth_secret_key`'s
+    # default is fine for local dev only — it's what makes the session cookie unforgeable, so
+    # set a real random value (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`)
+    # before deploying anywhere reachable by someone else.
+    auth_secret_key: str = "dev-insecure-secret-change-me"
+    auth_magic_link_ttl_minutes: int = 15
+    auth_session_ttl_days: int = 30
+    auth_cookie_name: str = "datapilot_session"
+    frontend_base_url: str = "http://localhost:3000"
+    # SMTP is optional: leave smtp_host empty for local dev and `POST /auth/request-link`
+    # returns the magic link directly in its response (and logs it) instead of emailing it
+    # (app/api/auth.py). Fill these in to actually send mail.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = "noreply@datapilot.local"
+    smtp_use_tls: bool = True
+
+    # API rate limiting (Phase 8, MASTER_PROMPT.md §9: "Rate-limit API calls per user, in
+    # addition to the LLM rate limiting in §5.8") — independent of LLMClient's own token bucket,
+    # which only guards outbound LLM-provider calls. 0 disables it.
+    api_rate_limit_per_minute: int = 120
+
+    # Sandboxed kernel resource limits (Phase 8, MASTER_PROMPT.md §9: "per-session total compute
+    # limits", on top of the per-cell timeout above). Cumulative wall-clock kernel execution time
+    # allowed per session across its whole lifetime, including after crash-recovery restarts.
+    # 0 disables it.
+    kernel_session_compute_budget_seconds: int = 1800
+
     # App
     env: str = "development"
     log_level: str = "INFO"

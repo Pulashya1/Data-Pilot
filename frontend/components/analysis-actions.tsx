@@ -1,8 +1,11 @@
 "use client";
 
+import { CircleDot, Download } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { ApiError, exportNotebook, getKernelStatus, listTemplates, runTemplate } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import type { KernelStatusOut, TemplateInfo } from "@/types";
 
 export function AnalysisActions({
@@ -58,63 +61,60 @@ export function AnalysisActions({
   };
 
   return (
-    <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="rounded-lg border border-line bg-surface">
+      <PanelHeader>
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium">Run analysis</h2>
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 text-[10px] font-medium uppercase",
-              kernel === "running"
-                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                : "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
-            )}
-          >
+          <PanelTitle>Run analysis</PanelTitle>
+          <Badge tone={kernel === "running" ? "success" : "neutral"} className="gap-1">
+            <CircleDot size={9} className={kernel === "running" ? "animate-pulse" : ""} />
             kernel: {kernel}
-          </span>
+          </Badge>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-400">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
             <input
               type="checkbox"
               checked={includePipeline}
               onChange={(e) => setIncludePipeline(e.target.checked)}
+              className="accent-accent"
             />
             Include fitted pipeline
           </label>
-          <label className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-400">
+          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
             <input
               type="checkbox"
               checked={includeExploratory}
               onChange={(e) => setIncludeExploratory(e.target.checked)}
+              className="accent-accent"
             />
             Include Q&amp;A cells
           </label>
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => void handleExport()}
             disabled={exporting}
-            className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium disabled:opacity-50 dark:border-neutral-700"
           >
+            <Download size={12} />
             {exporting ? "Exporting…" : "Export notebook"}
-          </button>
+          </Button>
         </div>
-      </div>
-      <div className="flex flex-wrap gap-2">
+      </PanelHeader>
+      <div className="flex flex-wrap gap-2 p-4">
         {templates.map((t) => (
-          <button
+          <Button
             key={t.key}
-            type="button"
+            variant="secondary"
+            size="sm"
             title={t.description}
             onClick={() => void run(t.key)}
             disabled={runningKey !== null}
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
           >
             {runningKey === t.key ? "Running…" : t.title}
-          </button>
+          </Button>
         ))}
       </div>
-      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
+      {error && <p className="px-4 pb-3 text-xs text-critical">{error}</p>}
     </div>
   );
 }

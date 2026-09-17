@@ -28,11 +28,18 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
   `pytest -m docker`
 - Verify a real LLM key + tool calling works (`LLM_MODEL`/`DEEPSEEK_API_KEY` etc. set in `.env`,
   needs Postgres reachable; no-ops if `LLM_MODEL=mock`): `python scripts/verify_llm.py`
+- Run the evaluation suite (Phase 8, MASTER_PROMPT.md §10) — **real, paid LLM calls, needs the
+  full stack + built kernel images running, never run in CI**: `python eval/run_eval.py`
+  (`--dataset <name>` to run just one, `--yes` to skip the cost-confirmation prompt)
 
 ### Frontend (from `frontend/`)
 - Install: `npm install`
 - Run dev server: `npm run dev`
 - Test: `npm test`
+- End-to-end test (Phase 8, MASTER_PROMPT.md §10) — needs the full real stack running (Postgres,
+  Redis, MinIO, built kernel images), backend on `LLM_MODEL=mock`: `npm run test:e2e`
+  (Playwright isn't started via its own `webServer` config for this — see
+  `playwright.config.ts`'s module docstring)
 - Lint: `npm run lint`
 - Format: `npm run format`
 - Type check: `npm run typecheck`
@@ -298,6 +305,60 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
   not paired, mirroring `NotebookCell`'s one-row-per-fact shape.
   `GET/POST /sessions/{id}/messages` list/create.
 
+## Hardening (Phase 8)
+- **Auth**: email magic-link login (MASTER_PROMPT.md §9's two options — chosen over OAuth to
+  avoid registering an external app just to sign in locally). `app/models/user.py`'s `User` +
+  `LoginToken` (one-time, hashed token, never the raw value); `app/core/security.py` signs the
+  session cookie itself as `"<user_id>.<expires_at>.<hmac>"` (stdlib `hmac`/`hashlib`, no
+  JWT/itsdangerous dependency) rather than storing a session row — logging out just deletes the
+  cookie client-side, so a stolen cookie stays valid until `AUTH_SESSION_TTL_DAYS` expires it, an
+  accepted trade-off for "simple auth". `POST /auth/request-link` emails the link via stdlib
+  `smtplib` (`app/core/email.py`) if `SMTP_HOST` is set; **otherwise (the local-dev default) it
+  returns the link directly in the response and logs it**, so login works with zero external
+  setup. `app/api/deps.py::get_current_user`/`get_owned_session`/`get_ready_owned_session` are
+  the dependencies every session/notebook/agent route now uses — a session that exists but
+  belongs to someone else 404s, same as one that doesn't exist, never 403.
+- **API rate limiting**: `app/core/rate_limit.py`, a fixed one-minute window in Redis keyed by
+  client IP (covers the pre-auth `/auth/request-link` too), independent of `LLMClient`'s own
+  token-bucket limiter (§5.8) which only guards outbound LLM calls. `API_RATE_LIMIT_PER_MINUTE`
+  (0 disables it), applied as a router-level `dependencies=[Depends(rate_limit)]` on every
+  router except health.
+- **Resource limits**: `KERNEL_SESSION_COMPUTE_BUDGET_SECONDS` (§9 "per-session total compute
+  limits", 0 disables it) — `KernelManager` (`app/execution/kernel_manager.py`) tracks
+  cumulative wall-clock kernel execution time per session, on top of the existing per-cell
+  timeout, and raises `KernelComputeBudgetExceededError` once exhausted (never reset by
+  crash-recovery restarts — it bounds the session's lifetime usage, not any one kernel
+  process's).
+- **Crash recovery hardening**: `docker_backend.py`'s `_execute_sync` now polls container
+  liveness every ~3s while idle-waiting for kernel messages, so a kernel killed mid-cell (e.g.
+  its own memory limit) is reported as a crash within a few seconds instead of only once the
+  *full* per-cell timeout elapses and getting misreported as a plain timeout. Kernel restart +
+  notebook replay on the next call was already in place since Phase 2
+  (`app.notebook.seed.make_on_start_hook`) — this only speeds up *detecting* a crash.
+- **HTML report export**: `app/notebook/export.py::render_notebook_html` — a single
+  self-contained HTML file (no `nbconvert` dependency; a small hand-rolled markdown/output
+  renderer instead, since the only markdown ever produced is this project's own simple subset —
+  see the module's comments). `POST /sessions/{id}/notebook/export?format=html` on the same
+  endpoint Phase 2/6 already used for the `.ipynb` zip (`format=zip`, the default), continuing
+  that flag-based pattern rather than a literal `format=ipynb|html|clean_csv|pipeline` route.
+- **Evaluation suite**: `backend/eval/datasets.py` (seeded synthetic stand-ins for the six
+  MASTER_PROMPT.md §10 benchmarks — not downloads of the real public datasets, since the
+  sandboxed kernel has no outbound network and this script shouldn't need one either) +
+  `backend/eval/run_eval.py` (drives the real app through `TestClient`, real kernel, real LLM;
+  refuses to run under `LLM_MODEL=mock`). Manual only, never CI.
+- **Playwright end-to-end test**: `frontend/e2e/upload-to-export.spec.ts` — sign in (dev-mode
+  magic link) → upload → confirm target → approve plan → answer the
+  `feature_engineering_approval` decision (the only other decision kind reached in a fixed
+  order, per `app/models/decision.py::DecisionKind`) → export. Needs the full real stack, not
+  just `next dev`, so it isn't wired to Playwright's own `webServer` launcher.
+- **Test-suite hygiene fix, unrelated to any one feature above**: `tests/conftest.py` now forces
+  `LLM_MODEL=mock` via `os.environ` before `Settings` is first imported, the same way it already
+  forced `DATABASE_URL` — a developer's shell commonly exports a real `LLM_MODEL`/API key for
+  `scripts/verify_llm.py`, and pydantic-settings prefers a real env var over both the field
+  default and `.env`, so without this the default `pytest` run could silently start billing a
+  real provider depending on the shell it happened to run in.
+
 ## Build phases
 Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)** through
-**Phase 7 (Q&A)** complete and passing tests, awaiting review before Phase 8.
+**Phase 8 (Hardening)** complete and passing tests — README with screenshots/architecture
+diagram is still outstanding (deferred until requested).

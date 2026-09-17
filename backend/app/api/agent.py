@@ -24,8 +24,10 @@ from app.agent.runner import (
     UnknownSessionError,
     get_agent_runner,
 )
+from app.api.deps import get_owned_session, get_ready_owned_session
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.core.rate_limit import rate_limit
 from app.core.storage import StorageBackend, get_storage_backend
 from app.execution.backend import ExecutionBackend
 from app.execution.kernel_manager import (
@@ -35,29 +37,15 @@ from app.execution.kernel_manager import (
 )
 from app.models.chat import ChatMessage
 from app.models.decision import Decision, DecisionKind
-from app.models.session import AgentStatus, SessionStatus, UploadSession
+from app.models.session import AgentStatus, UploadSession
 from app.schemas.chat import AskQuestionRequest, ChatMessageOut
 from app.schemas.decision import AnswerDecisionRequest, DecisionOut, EditPlanRequest
 from app.schemas.events import AgentStatusEvent
 from app.schemas.session import UsageOut
 
-router = APIRouter(tags=["agent"])
+router = APIRouter(tags=["agent"], dependencies=[Depends(rate_limit)])
 
 _KEEPALIVE_SECONDS = 15.0
-
-
-async def _get_session_or_404(session_id: str, db: AsyncSession) -> UploadSession:
-    session = await db.get(UploadSession, session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session
-
-
-async def _get_ready_session_or_404(session_id: str, db: AsyncSession) -> UploadSession:
-    session = await _get_session_or_404(session_id, db)
-    if session.status != SessionStatus.READY or session.profile is None:
-        raise HTTPException(status_code=409, detail="Session is not ready for analysis")
-    return session
 
 
 async def _answer_decision(
@@ -95,10 +83,11 @@ async def _answer_decision(
 
 @router.post("/sessions/{session_id}/agent/start", status_code=202)
 async def start_agent(
-    session_id: str, runner: Annotated[AgentRunner, Depends(get_agent_runner)]
+    session: Annotated[UploadSession, Depends(get_owned_session)],
+    runner: Annotated[AgentRunner, Depends(get_agent_runner)],
 ) -> dict[str, str]:
     try:
-        await runner.start(session_id)
+        await runner.start(session.id)
     except UnknownSessionError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
     except SessionNotReadyError as exc:
@@ -112,12 +101,11 @@ async def start_agent(
 
 @router.get("/sessions/{session_id}/stream")
 async def stream_agent(
-    session_id: str,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     request: Request,
-    db: Annotated[AsyncSession, Depends(get_db)],
     bus: Annotated[SessionEventBus, Depends(get_event_bus)],
 ) -> StreamingResponse:
-    await _get_session_or_404(session_id, db)
+    session_id = session.id
 
     async def event_source() -> AsyncGenerator[str]:
         subscription = bus.subscribe(session_id)
@@ -147,12 +135,12 @@ async def stream_agent(
 
 @router.get("/sessions/{session_id}/decisions", response_model=list[DecisionOut])
 async def list_decisions(
-    session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
+    session: Annotated[UploadSession, Depends(get_owned_session)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[DecisionOut]:
-    await _get_session_or_404(session_id, db)
     result = await db.execute(
         select(Decision)
-        .where(Decision.session_id == session_id)
+        .where(Decision.session_id == session.id)
         .order_by(Decision.created_at.asc())
     )
     return [DecisionOut.from_decision(d) for d in result.scalars().all()]
@@ -160,15 +148,14 @@ async def list_decisions(
 
 @router.post("/sessions/{session_id}/decisions/{decision_id}", response_model=DecisionOut)
 async def answer_decision(
-    session_id: str,
     decision_id: str,
     body: AnswerDecisionRequest,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     runner: Annotated[AgentRunner, Depends(get_agent_runner)],
 ) -> DecisionOut:
-    session = await _get_session_or_404(session_id, db)
     decision = await db.get(Decision, decision_id)
-    if decision is None or decision.session_id != session_id:
+    if decision is None or decision.session_id != session.id:
         raise HTTPException(status_code=404, detail="Decision not found")
 
     decision = await _answer_decision(session, decision, body.selected_option, db, runner)
@@ -177,16 +164,15 @@ async def answer_decision(
 
 @router.post("/sessions/{session_id}/plan", response_model=DecisionOut)
 async def edit_plan(
-    session_id: str,
     body: EditPlanRequest,
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     runner: Annotated[AgentRunner, Depends(get_agent_runner)],
 ) -> DecisionOut:
     """Structured plan-editing endpoint (MASTER_PROMPT.md §8): a nicer body than the generic
     `/decisions/{id}` answer for the one decision kind whose answer is itself a list. Answers
     whichever `plan_approval` decision is currently pending for this session."""
-    session = await _get_session_or_404(session_id, db)
-    decision = await get_decision(db, session_id, DecisionKind.PLAN_APPROVAL)
+    decision = await get_decision(db, session.id, DecisionKind.PLAN_APPROVAL)
     if decision is None:
         raise HTTPException(status_code=409, detail="No plan is awaiting approval yet.")
 
@@ -196,11 +182,9 @@ async def edit_plan(
 
 @router.get("/sessions/{session_id}/usage", response_model=UsageOut)
 async def get_usage(
-    session_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    session: Annotated[UploadSession, Depends(get_owned_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> UsageOut:
-    session = await _get_session_or_404(session_id, db)
     return UsageOut(
         calls_used=session.llm_calls_used,
         calls_budget=settings.llm_max_calls_per_session,
@@ -213,12 +197,12 @@ async def get_usage(
 
 @router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageOut])
 async def list_messages(
-    session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
+    session: Annotated[UploadSession, Depends(get_owned_session)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[ChatMessage]:
-    await _get_session_or_404(session_id, db)
     result = await db.execute(
         select(ChatMessage)
-        .where(ChatMessage.session_id == session_id)
+        .where(ChatMessage.session_id == session.id)
         .order_by(ChatMessage.created_at.asc())
     )
     return list(result.scalars().all())
@@ -226,8 +210,8 @@ async def list_messages(
 
 @router.post("/sessions/{session_id}/messages", response_model=ChatMessageOut, status_code=201)
 async def post_message(
-    session_id: str,
     body: AskQuestionRequest,
+    session: Annotated[UploadSession, Depends(get_ready_owned_session)],
     db: Annotated[AsyncSession, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     backend: Annotated[ExecutionBackend, Depends(get_execution_backend)],
@@ -239,7 +223,6 @@ async def post_message(
     """MASTER_PROMPT.md §5.6, §8: ask a question about the dataset, a chart, an insight, a
     decision, or a specific cell (`@cell-<position>`). Synchronous — see `app.agent.qa`'s
     module docstring for why this isn't routed through the LangGraph agent run."""
-    session = await _get_ready_session_or_404(session_id, db)
     deps = NodeDeps(
         db=db,
         storage=storage,

@@ -9,6 +9,7 @@ cells; `KernelManager` itself only tracks liveness and idles kernels out.
 
 import asyncio
 import contextlib
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -16,7 +17,7 @@ from functools import lru_cache
 from typing import Literal
 
 from app.core.config import get_settings
-from app.execution.backend import ExecutionBackend, KernelHandle
+from app.execution.backend import ExecutionBackend, KernelComputeBudgetExceededError, KernelHandle
 from app.execution.docker_backend import DockerJupyterBackend
 from app.schemas.execution import ExecutionResult
 
@@ -32,11 +33,18 @@ class KernelManager:
         idle_timeout_minutes: int,
         default_cell_timeout_seconds: int,
         reap_interval_seconds: float = 60.0,
+        compute_budget_seconds: float = 0.0,
     ) -> None:
         self._backend = backend
         self._idle_timeout = timedelta(minutes=idle_timeout_minutes)
         self._default_cell_timeout = default_cell_timeout_seconds
         self._reap_interval_seconds = reap_interval_seconds
+        # MASTER_PROMPT.md §9 "per-session total compute limits": <=0 means unlimited, the same
+        # convention `Settings.kernel_session_compute_budget_seconds` documents. Deliberately
+        # never reset by `shutdown_session`/crash recovery — it bounds a session's *lifetime*
+        # kernel usage, not any one kernel process's.
+        self._compute_budget_seconds = compute_budget_seconds
+        self._compute_used_seconds: dict[str, float] = defaultdict(float)
         self._handles: dict[str, KernelHandle] = {}
         self._last_used: dict[str, datetime] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -66,12 +74,25 @@ class KernelManager:
         timeout: float | None = None,
         on_start: OnStartHook | None = None,
     ) -> ExecutionResult:
+        if (
+            self._compute_budget_seconds > 0
+            and self._compute_used_seconds[session_id] >= self._compute_budget_seconds
+        ):
+            raise KernelComputeBudgetExceededError(
+                f"This session has used its full kernel compute budget "
+                f"({self._compute_budget_seconds:.0f}s). Start a new session to continue."
+            )
         handle = await self.ensure_kernel(session_id, on_start=on_start)
+        started = time.monotonic()
         result = await self._backend.execute(
             handle, code, timeout=timeout or self._default_cell_timeout
         )
+        self._compute_used_seconds[session_id] += time.monotonic() - started
         self._touch(session_id)
         return result
+
+    def compute_seconds_used(self, session_id: str) -> float:
+        return self._compute_used_seconds.get(session_id, 0.0)
 
     async def write_file(
         self,
@@ -135,4 +156,5 @@ def get_kernel_manager() -> KernelManager:
         get_execution_backend(),
         idle_timeout_minutes=settings.kernel_idle_timeout_minutes,
         default_cell_timeout_seconds=settings.kernel_cell_timeout_seconds,
+        compute_budget_seconds=settings.kernel_session_compute_budget_seconds,
     )

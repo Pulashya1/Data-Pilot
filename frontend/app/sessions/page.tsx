@@ -1,10 +1,13 @@
 "use client";
 
+import { ArrowLeft, FileText, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { AuthGuard } from "@/components/auth-guard";
+import { Badge } from "@/components/ui/badge";
 import { ApiError, deleteSession, listSessions } from "@/lib/api";
 import { formatBytes } from "@/lib/utils";
-import type { SessionSummary } from "@/types";
+import type { SessionStatus, SessionSummary } from "@/types";
 
 const STATUS_LABEL: Record<string, string> = {
   uploaded: "Uploaded",
@@ -12,6 +15,14 @@ const STATUS_LABEL: Record<string, string> = {
   profiling: "Profiling…",
   ready: "Ready",
   error: "Error",
+};
+
+const STATUS_TONE: Record<SessionStatus, "neutral" | "success" | "critical" | "warning"> = {
+  uploaded: "neutral",
+  needs_sheet_selection: "warning",
+  profiling: "neutral",
+  ready: "success",
+  error: "critical",
 };
 
 export default function SessionsPage() {
@@ -34,40 +45,64 @@ export default function SessionsPage() {
   };
 
   return (
-    <main className="mx-auto max-w-3xl p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Sessions</h1>
-        <Link href="/" className="text-sm text-neutral-500 underline hover:text-neutral-900">
-          New upload
-        </Link>
-      </div>
-      {error && <p className="text-sm text-red-500">{error}</p>}
-      {sessions === null && !error && <p className="text-sm text-neutral-500">Loading…</p>}
-      {sessions?.length === 0 && <p className="text-sm text-neutral-500">No sessions yet.</p>}
-      <ul className="flex flex-col gap-2">
-        {sessions?.map((session) => (
-          <li
-            key={session.id}
-            className="flex items-center justify-between rounded-lg border border-neutral-200 p-3 dark:border-neutral-800"
+    <AuthGuard>
+      <main className="mx-auto max-w-3xl px-4 py-10 lg:px-8">
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="font-display text-xl font-semibold tracking-tight text-ink">Sessions</h1>
+          <Link
+            href="/"
+            className="flex items-center gap-1 text-sm text-ink-tertiary transition-colors hover:text-accent"
           >
-            <Link href={`/sessions/${session.id}`} className="flex-1">
-              <p className="font-medium">{session.original_filename}</p>
-              <p className="text-xs text-neutral-500">
-                {STATUS_LABEL[session.status] ?? session.status} · {formatBytes(session.size_bytes)}
-                {session.row_count !== null && ` · ${session.row_count.toLocaleString()} rows`}
-                {session.column_count !== null && ` · ${session.column_count} cols`}
-              </p>
-            </Link>
-            <button
-              type="button"
-              onClick={() => void handleDelete(session.id)}
-              className="ml-4 text-xs text-red-500 hover:underline"
+            <ArrowLeft size={13} />
+            New upload
+          </Link>
+        </div>
+        {error && <p className="text-sm text-critical">{error}</p>}
+        {sessions === null && !error && <p className="text-sm text-ink-tertiary">Loading…</p>}
+        {sessions?.length === 0 && (
+          <div className="rounded-lg border border-dashed border-line px-6 py-12 text-center">
+            <p className="text-sm text-ink-tertiary">
+              No sessions yet — upload a dataset to start one.
+            </p>
+          </div>
+        )}
+        <ul className="flex flex-col gap-2">
+          {sessions?.map((session) => (
+            <li
+              key={session.id}
+              className="group flex items-center justify-between gap-3 rounded-lg border border-line bg-surface px-4 py-3 transition-colors hover:border-line-strong hover:bg-surface-2"
             >
-              Delete
-            </button>
-          </li>
-        ))}
-      </ul>
-    </main>
+              <Link
+                href={`/sessions/${session.id}`}
+                className="flex min-w-0 flex-1 items-center gap-3"
+              >
+                <FileText size={16} className="shrink-0 text-ink-tertiary" />
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-ink">{session.original_filename}</p>
+                  <p className="tabular mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-tertiary">
+                    <Badge tone={STATUS_TONE[session.status]}>
+                      {STATUS_LABEL[session.status] ?? session.status}
+                    </Badge>
+                    <span>{formatBytes(session.size_bytes)}</span>
+                    {session.row_count !== null && (
+                      <span>· {session.row_count.toLocaleString()} rows</span>
+                    )}
+                    {session.column_count !== null && <span>· {session.column_count} cols</span>}
+                  </p>
+                </div>
+              </Link>
+              <button
+                type="button"
+                onClick={() => void handleDelete(session.id)}
+                aria-label="Delete session"
+                className="shrink-0 rounded-md p-1.5 text-ink-tertiary opacity-0 transition-colors hover:bg-critical/10 hover:text-critical group-hover:opacity-100"
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </main>
+    </AuthGuard>
   );
 }

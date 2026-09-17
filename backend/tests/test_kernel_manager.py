@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from app.execution.backend import KernelComputeBudgetExceededError
 from app.execution.kernel_manager import KernelManager
 from tests.fakes import FakeExecutionBackend
 
@@ -74,6 +75,42 @@ async def test_shutdown_session_removes_tracking(
     await manager.shutdown_session("s1")
     assert manager.kernel_status("s1") == "stopped"
     assert backend.alive.get("s1") is False
+
+
+async def test_compute_budget_exceeded_blocks_further_cells(
+    backend: FakeExecutionBackend,
+) -> None:
+    manager = KernelManager(
+        backend,
+        idle_timeout_minutes=30,
+        default_cell_timeout_seconds=30,
+        compute_budget_seconds=10.0,
+    )
+    await manager.run_cell("s1", "x = 1")
+    # Simulate a session that's already used its whole budget (real elapsed time from an
+    # in-process fake execute() is too small/timing-dependent to rely on here) — same "reach
+    # into private test state" style as `backend.kill_session` above.
+    manager._compute_used_seconds["s1"] = 999.0  # noqa: SLF001
+
+    with pytest.raises(KernelComputeBudgetExceededError):
+        await manager.run_cell("s1", "x = 2")
+
+
+async def test_compute_budget_zero_means_unlimited(backend: FakeExecutionBackend) -> None:
+    manager = KernelManager(
+        backend, idle_timeout_minutes=30, default_cell_timeout_seconds=30, compute_budget_seconds=0
+    )
+    manager._compute_used_seconds["s1"] = 10_000.0  # noqa: SLF001
+    result = await manager.run_cell("s1", "x = 1")
+    assert result.status == "ok"
+
+
+async def test_compute_seconds_used_tracks_cumulative_execution_time(
+    manager: KernelManager,
+) -> None:
+    assert manager.compute_seconds_used("s1") == 0.0
+    await manager.run_cell("s1", "x = 1")
+    assert manager.compute_seconds_used("s1") >= 0.0
 
 
 async def test_idle_reaper_shuts_down_kernels_past_the_timeout() -> None:

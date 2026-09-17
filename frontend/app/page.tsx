@@ -1,19 +1,30 @@
+import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { AuthGuard } from "@/components/auth-guard";
 import { UploadDropzone } from "@/components/upload-dropzone";
 
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-8 text-center">
-      <div>
-        <h1 className="text-3xl font-semibold">DataPilot</h1>
-        <p className="mt-1 text-neutral-600">
-          Upload a dataset and get an agentic EDA & feature engineering assistant.
-        </p>
-      </div>
-      <UploadDropzone />
-      <Link href="/sessions" className="text-sm text-neutral-500 underline hover:text-neutral-900">
-        View past sessions
-      </Link>
-    </main>
+    <AuthGuard>
+      <main className="grid-texture flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center gap-8 px-6 py-16">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">
+            Upload a dataset
+          </h1>
+          <p className="max-w-md text-sm leading-relaxed text-ink-tertiary">
+            An agent explores it with you — profiling, feature engineering, and a live notebook,
+            step by step.
+          </p>
+        </div>
+        <UploadDropzone />
+        <Link
+          href="/sessions"
+          className="flex items-center gap-1 text-sm text-ink-tertiary transition-colors hover:text-accent"
+        >
+          View past sessions
+          <ArrowRight size={13} />
+        </Link>
+      </main>
+    </AuthGuard>
   );
 }

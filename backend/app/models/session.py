@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -53,6 +53,13 @@ class UploadSession(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Auth (Phase 8, MASTER_PROMPT.md §9): "Users can access only their own sessions" — every
+    # API route that takes a session_id checks this against the authenticated user
+    # (app/api/deps.py::get_owned_session). Nullable so pre-auth rows created by direct DB/test
+    # fixtures don't need a user; every row created through the API always has one.
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     original_filename: Mapped[str] = mapped_column(String(512))
     storage_key: Mapped[str] = mapped_column(String(512))
     file_type: Mapped[FileType] = mapped_column(Enum(FileType, native_enum=False))

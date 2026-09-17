@@ -9,6 +9,7 @@ from app.models.session import (
     SessionStatus,
     UploadSession,
 )
+from app.models.user import LoginToken, User
 
 __all__ = [
     "AgentStatus",
@@ -20,8 +21,10 @@ __all__ = [
     "DecisionKind",
     "ExpertiseLevel",
     "FileType",
+    "LoginToken",
     "NotebookCell",
     "ProblemType",
     "SessionStatus",
     "UploadSession",
+    "User",
 ]

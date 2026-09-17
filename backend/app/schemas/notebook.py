@@ -33,3 +33,7 @@ class TemplateInfo(BaseModel):
 
 class KernelStatusOut(BaseModel):
     status: str
+    # Phase 8, MASTER_PROMPT.md §9 "per-session total compute limits": cumulative wall-clock
+    # kernel execution time this session has used so far, against
+    # `Settings.kernel_session_compute_budget_seconds` (0 = unlimited).
+    compute_seconds_used: float = 0.0

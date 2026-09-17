@@ -1,11 +1,13 @@
 import type {
   AgentEvent,
+  AuthUser,
   ChatMessageOut,
   DecisionOut,
   ExpertiseLevel,
   KernelStatusOut,
   NotebookCell,
   PreviewResponse,
+  RequestLinkResponse,
   SessionDetail,
   SessionSummary,
   TemplateInfo,
@@ -33,7 +35,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store", ...init });
+  // Auth (Phase 8, MASTER_PROMPT.md §9): the session cookie is set by POST /auth/verify on the
+  // backend's own origin (a different port in dev) — `credentials: "include"` is what makes
+  // the browser send it back on every request here instead of treating this as a cookie-less
+  // cross-origin call.
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    cache: "no-store",
+    credentials: "include",
+    ...init,
+  });
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -176,7 +186,12 @@ export function subscribeToAgentStream(
   sessionId: string,
   onEvent: (event: AgentEvent) => void,
 ): () => void {
-  const source = new EventSource(`${API_BASE_URL}/sessions/${sessionId}/stream`);
+  // `withCredentials: true` so the session cookie (a different port in dev, so cross-origin
+  // from the browser's point of view) is sent — same reasoning as `request()`'s
+  // `credentials: "include"` above.
+  const source = new EventSource(`${API_BASE_URL}/sessions/${sessionId}/stream`, {
+    withCredentials: true,
+  });
   source.onmessage = (message) => {
     try {
       onEvent(JSON.parse(message.data) as AgentEvent);
@@ -195,7 +210,7 @@ export async function exportNotebook(
 ): Promise<void> {
   const res = await fetch(
     `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}&include_pipeline=${includePipeline}&include_exploratory=${includeExploratory}`,
-    { method: "POST", cache: "no-store" },
+    { method: "POST", cache: "no-store", credentials: "include" },
   );
   if (!res.ok) {
     let detail = res.statusText;
@@ -218,4 +233,26 @@ export async function exportNotebook(
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// Auth (Phase 8, MASTER_PROMPT.md §9, §12): email magic-link login.
+
+export function requestLoginLink(email: string): Promise<RequestLinkResponse> {
+  return request<RequestLinkResponse>("/auth/request-link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function verifyLoginToken(token: string): Promise<AuthUser> {
+  return request<AuthUser>(`/auth/verify?token=${encodeURIComponent(token)}`);
+}
+
+export async function logout(): Promise<void> {
+  await request("/auth/logout", { method: "POST" });
+}
+
+export function getCurrentUser(): Promise<AuthUser> {
+  return request<AuthUser>("/auth/me");
 }

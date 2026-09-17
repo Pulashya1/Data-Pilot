@@ -1,5 +1,6 @@
 "use client";
 
+import { FileUp, UploadCloud } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { ApiError, selectSheet, uploadSession } from "@/lib/api";
@@ -78,32 +79,41 @@ export function UploadDropzone() {
 
   if (pendingSheetSession) {
     return (
-      <div className="w-full max-w-lg rounded-lg border border-neutral-300 p-6 dark:border-neutral-700">
-        <h2 className="mb-2 text-lg font-medium">Choose a sheet</h2>
-        <p className="mb-4 text-sm text-neutral-500">
+      <div className="w-full max-w-lg rounded-lg border border-line bg-surface p-6 shadow-floating">
+        <h2 className="mb-2 font-display text-lg font-medium text-ink">Choose a sheet</h2>
+        <p className="mb-4 text-sm text-ink-tertiary">
           &quot;{pendingSheetSession.original_filename}&quot; has multiple sheets. Pick the one to
           analyze.
         </p>
         <div className="mb-4 flex flex-col gap-2">
           {pendingSheetSession.sheet_names?.map((name) => (
-            <label key={name} className="flex items-center gap-2 text-sm">
+            <label
+              key={name}
+              className={cn(
+                "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                selectedSheet === name
+                  ? "border-accent/50 bg-accent/10 text-ink"
+                  : "border-line text-ink-secondary hover:border-line-strong",
+              )}
+            >
               <input
                 type="radio"
                 name="sheet"
                 value={name}
                 checked={selectedSheet === name}
                 onChange={() => setSelectedSheet(name)}
+                className="accent-accent"
               />
               {name}
             </label>
           ))}
         </div>
-        {error && <p className="mb-3 text-sm text-red-500">{error}</p>}
+        {error && <p className="mb-3 text-sm text-critical">{error}</p>}
         <button
           type="button"
           onClick={confirmSheet}
           disabled={isUploading}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-50"
         >
           {isUploading ? "Loading…" : "Continue"}
         </button>
@@ -133,16 +143,23 @@ export function UploadDropzone() {
         }}
         aria-label="Upload a dataset file"
         className={cn(
-          "flex w-full cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed p-12 text-center transition-colors",
+          "flex w-full cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed p-12 text-center transition-all duration-150",
           isDragging
-            ? "border-neutral-900 bg-neutral-50 dark:border-neutral-100 dark:bg-neutral-900"
-            : "border-neutral-300 dark:border-neutral-700",
+            ? "scale-[1.01] border-accent bg-accent/[0.06]"
+            : "border-line-strong bg-surface hover:border-ink-tertiary",
         )}
       >
-        <p className="font-medium">
+        {isDragging ? (
+          <FileUp size={26} className="text-accent" />
+        ) : (
+          <UploadCloud size={26} className="text-ink-tertiary" />
+        )}
+        <p className="font-medium text-ink">
           {isUploading ? "Uploading…" : "Drag & drop a dataset, or click to browse"}
         </p>
-        <p className="text-sm text-neutral-500">CSV, TSV, Excel, JSON, or Parquet — up to 200 MB</p>
+        <p className="text-sm text-ink-tertiary">
+          CSV, TSV, Excel, JSON, or Parquet — up to 200 MB
+        </p>
         <input
           ref={inputRef}
           type="file"
@@ -155,8 +172,8 @@ export function UploadDropzone() {
           }}
         />
       </div>
-      {error && <p className="text-sm text-red-500">{error}</p>}
-      <p className="text-xs text-neutral-500">
+      {error && <p className="text-sm text-critical">{error}</p>}
+      <p className="text-xs text-ink-tertiary">
         Data you upload may be sent to a third-party LLM provider for analysis. Prefer public or
         non-sensitive datasets.
       </p>

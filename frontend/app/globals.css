@@ -2,17 +2,163 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------------------------
+   "Control Room" design tokens. Dark is the default identity (no class needed); `.light` on
+   <html> (see components/theme-toggle.tsx) overrides the same variable names. Every value is
+   "R G B" so Tailwind's `rgb(var(--x) / <alpha-value>)` pattern (tailwind.config.ts) can still
+   apply opacity modifiers like `bg-warning/10`.
+--------------------------------------------------------------------------------------------- */
 :root {
-  --background: #ffffff;
-  --foreground: #0a0a0a;
+  --canvas: 15 18 21; /* #0F1215 */
+  --surface: 20 24 29; /* #14181D */
+  --surface-2: 27 32 39; /* #1B2027 */
+  --surface-3: 32 38 46; /* #20262E */
+  --line: 38 44 51; /* #262C33 */
+  --line-strong: 51 59 68; /* #333B44 */
+  --ink: 231 236 239; /* #E7ECEF */
+  --ink-secondary: 154 165 177; /* #9AA5B1 */
+  --ink-tertiary: 107 116 128; /* #6B7480 */
+  --accent: 77 214 194; /* #4DD6C2 */
+  --accent-strong: 110 230 212; /* #6EE6D4 */
+  --accent-fg: 6 33 29; /* #06211D */
+  --secondary: 124 147 240; /* #7C93F0 */
+  --secondary-strong: 151 169 245; /* #97A9F5 */
+  --info: 91 141 239; /* #5B8DEF */
+  --warning: 232 162 61; /* #E8A23D */
+  --critical: 229 72 77; /* #E5484D */
+  --success: 69 183 136; /* #45B788 */
+
+  color-scheme: dark;
 }
 
-.dark {
-  --background: #0a0a0a;
-  --foreground: #f5f5f5;
+:root.light {
+  --canvas: 243 245 246; /* #F3F5F6 */
+  --surface: 255 255 255;
+  --surface-2: 238 241 243; /* #EEF1F3 */
+  --surface-3: 228 232 235; /* #E4E8EB */
+  --line: 221 227 232; /* #DDE3E8 */
+  --line-strong: 199 207 214; /* #C7CFD6 */
+  --ink: 20 24 29; /* #14181D */
+  --ink-secondary: 75 85 99; /* #4B5563 */
+  --ink-tertiary: 107 116 128;
+  --accent: 14 143 129; /* #0E8F81 */
+  --accent-strong: 11 114 103; /* #0B7267 */
+  --accent-fg: 255 255 255;
+  --secondary: 74 99 209; /* #4A63D1 */
+  --secondary-strong: 58 80 180; /* #3A50B4 */
+  --info: 47 111 224; /* #2F6FE0 */
+  --warning: 181 115 10; /* #B5730A */
+  --critical: 194 37 48; /* #C22530 */
+  --success: 31 143 95; /* #1F8F5F */
+
+  color-scheme: light;
+}
+
+* {
+  border-color: rgb(var(--line));
+}
+
+html {
+  background-color: rgb(var(--canvas));
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: rgb(var(--canvas));
+  color: rgb(var(--ink));
+  font-feature-settings: "cv02", "cv03", "cv04", "tnum";
+}
+
+::selection {
+  background-color: rgb(var(--accent) / 0.28);
+  color: rgb(var(--ink));
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
+/* Tabular, monospaced numerals wherever real data is displayed (row counts, stats, usage). */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Scrollbars — used on the notebook panel and the docked chat, not applied globally so the
+   rest of the page keeps native OS scrollbars.
+--------------------------------------------------------------------------------------------- */
+.styled-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line-strong)) transparent;
+}
+.styled-scrollbar::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.styled-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.styled-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--line-strong));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.styled-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--ink-tertiary));
+}
+
+/* Faint instrument-panel grid, used sparingly (login hero, empty states) — never on dense
+   data panels, where it would compete with real content. */
+.grid-texture {
+  background-image: linear-gradient(rgb(var(--line) / 0.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--line) / 0.5) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Streaming/thinking indicator — a signal-meter, not a generic spinner. Four bars pulsing out
+   of phase, like a live audio/telemetry level meter.
+--------------------------------------------------------------------------------------------- */
+.signal-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 14px;
+}
+.signal-meter span {
+  display: block;
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background-color: rgb(var(--accent));
+  transform-origin: bottom;
+  animation: signal-bar 1s ease-in-out infinite;
+}
+.signal-meter span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.signal-meter span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+.signal-meter span:nth-child(4) {
+  animation-delay: 0.36s;
+}
+
+.cursor-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  vertical-align: text-bottom;
+  background-color: rgb(var(--accent));
+  animation: cursor-blink 1s step-start infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signal-meter span,
+  .cursor-caret,
+  .animate-fade-in {
+    animation: none !important;
+  }
 }

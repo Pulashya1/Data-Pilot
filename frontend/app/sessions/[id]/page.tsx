@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowLeft, CircleAlert, Play } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -17,6 +18,7 @@ import {
 } from "@/lib/api";
 import { AgentStatusBar } from "@/components/agent-status";
 import { AnalysisActions } from "@/components/analysis-actions";
+import { AuthGuard } from "@/components/auth-guard";
 import { ChatPanel } from "@/components/chat-panel";
 import { ColumnStatsTable } from "@/components/column-stats-table";
 import { DataQualityScoreCard } from "@/components/data-quality-score";
@@ -25,6 +27,8 @@ import { DecisionsPanel } from "@/components/decisions-panel";
 import { InsightFeed } from "@/components/insight-feed";
 import { NotebookPanel } from "@/components/notebook-panel";
 import { PreviewTable } from "@/components/preview-table";
+import { PanelHeader, PanelTitle } from "@/components/ui/panel";
+import { SignalMeter } from "@/components/ui/signal-meter";
 import { formatBytes } from "@/lib/utils";
 import type {
   AgentEvent,
@@ -61,27 +65,28 @@ function SheetPicker({
   };
 
   return (
-    <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-      <h2 className="mb-2 font-medium">Choose a sheet</h2>
+    <div className="rounded-lg border border-line bg-surface p-4">
+      <h2 className="mb-2 font-display font-medium text-ink">Choose a sheet</h2>
       <div className="mb-3 flex flex-col gap-2">
         {session.sheet_names?.map((name) => (
-          <label key={name} className="flex items-center gap-2 text-sm">
+          <label key={name} className="flex items-center gap-2 text-sm text-ink-secondary">
             <input
               type="radio"
               name="sheet"
               checked={selected === name}
               onChange={() => setSelected(name)}
+              className="accent-accent"
             />
             {name}
           </label>
         ))}
       </div>
-      {error && <p className="mb-2 text-sm text-red-500">{error}</p>}
+      {error && <p className="mb-2 text-sm text-critical">{error}</p>}
       <button
         type="button"
         onClick={() => void confirm()}
         disabled={busy}
-        className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+        className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-50"
       >
         {busy ? "Loading…" : "Continue"}
       </button>
@@ -273,137 +278,186 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
   const pendingDecision = decisions.find((d) => d.selected_option === null) ?? null;
 
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <Link href="/sessions" className="text-sm text-neutral-500 underline hover:text-neutral-900">
-        ← All sessions
-      </Link>
+    <AuthGuard>
+      <main className="mx-auto max-w-[1440px] px-4 py-6 lg:px-8 lg:py-8">
+        <Link
+          href="/sessions"
+          className="flex w-fit items-center gap-1 text-sm text-ink-tertiary transition-colors hover:text-accent"
+        >
+          <ArrowLeft size={13} />
+          All sessions
+        </Link>
 
-      {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
-      {!session && !error && <p className="mt-4 text-sm text-neutral-500">Loading…</p>}
-
-      {session && (
-        <div className="mt-4 flex flex-col gap-6">
-          <div>
-            <h1 className="text-2xl font-semibold">{session.original_filename}</h1>
-            <p className="text-sm text-neutral-500">
-              {session.file_type.toUpperCase()} · {formatBytes(session.size_bytes)}
-              {session.row_count !== null && ` · ${session.row_count.toLocaleString()} rows`}
-              {session.column_count !== null && ` · ${session.column_count} columns`}
-            </p>
+        {error && (
+          <p className="mt-4 flex items-center gap-1.5 text-sm text-critical">
+            <CircleAlert size={14} />
+            {error}
+          </p>
+        )}
+        {!session && !error && (
+          <div className="flex justify-center py-16">
+            <SignalMeter />
           </div>
+        )}
 
-          {session.status === "needs_sheet_selection" && (
-            <SheetPicker session={session} onResolved={setSession} />
-          )}
+        {session && (
+          <div className="mt-4 flex flex-col gap-6">
+            <div>
+              <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">
+                {session.original_filename}
+              </h1>
+              <p className="tabular mt-1 text-sm text-ink-tertiary">
+                {session.file_type.toUpperCase()} · {formatBytes(session.size_bytes)}
+                {session.row_count !== null && ` · ${session.row_count.toLocaleString()} rows`}
+                {session.column_count !== null && ` · ${session.column_count} columns`}
+              </p>
+            </div>
 
-          {session.status === "error" && (
-            <p className="text-sm text-red-500">
-              {session.error_message ?? "This file could not be parsed."}
-            </p>
-          )}
+            {session.status === "needs_sheet_selection" && (
+              <SheetPicker session={session} onResolved={setSession} />
+            )}
 
-          {session.status === "ready" && session.profile && (
-            <>
-              {session.profile.is_sampled && (
-                <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                  This dataset has {session.profile.n_rows.toLocaleString()} rows. Statistics below
-                  were computed on a random sample of{" "}
-                  {session.profile.sample_size?.toLocaleString()} rows.
-                </p>
-              )}
+            {session.status === "error" && (
+              <p className="flex items-center gap-1.5 text-sm text-critical">
+                <CircleAlert size={14} />
+                {session.error_message ?? "This file could not be parsed."}
+              </p>
+            )}
 
-              <DataQualityScoreCard score={session.profile.data_quality} />
+            {session.status === "ready" && session.profile && (
+              <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-8">
+                {/* Analysis + notebook — the main scrollable column. */}
+                <div className="flex min-w-0 flex-col gap-6">
+                  {session.profile.is_sampled && (
+                    <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2.5 text-sm text-ink">
+                      This dataset has {session.profile.n_rows.toLocaleString()} rows. Statistics
+                      below were computed on a random sample of{" "}
+                      {session.profile.sample_size?.toLocaleString()} rows.
+                    </p>
+                  )}
 
-              <div>
-                <h2 className="mb-2 text-lg font-medium">Columns</h2>
-                <ColumnStatsTable columns={session.profile.columns} />
-              </div>
+                  <DataQualityScoreCard score={session.profile.data_quality} />
 
-              <div>
-                <h2 className="mb-2 text-lg font-medium">Preview</h2>
-                <PreviewTable
-                  sessionId={session.id}
-                  columns={session.profile.columns.map((c) => c.name)}
-                />
-              </div>
+                  <section>
+                    <h2 className="mb-2 font-display text-base font-medium tracking-tight text-ink">
+                      Columns
+                    </h2>
+                    <ColumnStatsTable columns={session.profile.columns} />
+                  </section>
 
-              <AnalysisActions sessionId={session.id} onRunComplete={refreshNotebook} />
+                  <section>
+                    <h2 className="mb-2 font-display text-base font-medium tracking-tight text-ink">
+                      Preview
+                    </h2>
+                    <PreviewTable
+                      sessionId={session.id}
+                      columns={session.profile.columns.map((c) => c.name)}
+                    />
+                  </section>
 
-              <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-medium">Agent</h2>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
-                      Explain like I&apos;m
-                      <select
-                        value={session.expertise_level}
-                        onChange={(e) =>
-                          void handleExpertiseLevelChange(e.target.value as ExpertiseLevel)
-                        }
-                        className="rounded-md border border-neutral-300 bg-transparent px-1 py-0.5 text-xs dark:border-neutral-700"
-                      >
-                        <option value="beginner">a beginner</option>
-                        <option value="intermediate">intermediate</option>
-                        <option value="expert">an expert</option>
-                      </select>
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
-                      <input
-                        type="checkbox"
-                        checked={session.auto_decide}
-                        onChange={(e) => void handleAutoDecideToggle(e.target.checked)}
+                  <AnalysisActions sessionId={session.id} onRunComplete={refreshNotebook} />
+
+                  <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface">
+                    <PanelHeader>
+                      <PanelTitle>Agent</PanelTitle>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
+                          Explain like I&apos;m
+                          <select
+                            value={session.expertise_level}
+                            onChange={(e) =>
+                              void handleExpertiseLevelChange(e.target.value as ExpertiseLevel)
+                            }
+                            className="rounded-md border border-line-strong bg-surface-2 px-1.5 py-0.5 text-xs text-ink"
+                          >
+                            <option value="beginner">a beginner</option>
+                            <option value="intermediate">intermediate</option>
+                            <option value="expert">an expert</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
+                          <input
+                            type="checkbox"
+                            checked={session.auto_decide}
+                            onChange={(e) => void handleAutoDecideToggle(e.target.checked)}
+                            className="accent-accent"
+                          />
+                          Let the agent decide
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void runAgent()}
+                          disabled={agentStatus === "running" || agentStatus === "waiting_decision"}
+                          className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-50"
+                        >
+                          <Play size={11} />
+                          {agentStatus === "running" ? "Running…" : "Run agent"}
+                        </button>
+                      </div>
+                    </PanelHeader>
+                    <div className="flex flex-col gap-3 px-4 pb-4">
+                      <AgentStatusBar
+                        agentStatus={agentStatus}
+                        llmStatus={llmStatus}
+                        callsUsed={callsUsed}
+                        callsBudget={callsBudget}
                       />
-                      Let the agent decide
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => void runAgent()}
-                      disabled={agentStatus === "running" || agentStatus === "waiting_decision"}
-                      className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
-                    >
-                      {agentStatus === "running" ? "Running…" : "Run agent"}
-                    </button>
+                      {session.target_column !== null && (
+                        <p className="text-sm text-ink-secondary">
+                          Target:{" "}
+                          <span className="font-mono font-medium text-ink">
+                            {session.target_column}
+                          </span>
+                          {session.problem_type && (
+                            <span className="text-ink-tertiary">
+                              {" "}
+                              · {session.problem_type.replace(/_/g, " ")}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                      {agentError && (
+                        <p className="flex items-center gap-1.5 text-sm text-critical">
+                          <CircleAlert size={14} />
+                          {agentError}
+                        </p>
+                      )}
+                      {pendingDecision && (
+                        <DecisionCard decision={pendingDecision} onAnswer={handleAnswerDecision} />
+                      )}
+                      <InsightFeed insights={insights} />
+                      <DecisionsPanel decisions={decisions} />
+                    </div>
                   </div>
+
+                  <section>
+                    <h2 className="mb-2 font-display text-base font-medium tracking-tight text-ink">
+                      Notebook
+                    </h2>
+                    <NotebookPanel
+                      cells={cells}
+                      onRevert={handleRevert}
+                      reverting={reverting}
+                      onAskAboutCell={handleAskAboutCell}
+                    />
+                  </section>
                 </div>
-                <AgentStatusBar
-                  agentStatus={agentStatus}
-                  llmStatus={llmStatus}
-                  callsUsed={callsUsed}
-                  callsBudget={callsBudget}
-                />
-                {session.target_column !== null && (
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                    Target: <span className="font-medium">{session.target_column}</span>
-                    {session.problem_type && ` · ${session.problem_type.replace(/_/g, " ")}`}
-                  </p>
-                )}
-                {agentError && <p className="text-sm text-red-500">{agentError}</p>}
-                {pendingDecision && (
-                  <DecisionCard decision={pendingDecision} onAnswer={handleAnswerDecision} />
-                )}
-                <InsightFeed insights={insights} />
-                <DecisionsPanel decisions={decisions} />
-              </div>
 
-              <ChatPanel
-                sessionId={session.id}
-                prefill={chatPrefill}
-                onPrefillConsumed={handlePrefillConsumed}
-              />
-
-              <div>
-                <h2 className="mb-2 text-lg font-medium">Notebook</h2>
-                <NotebookPanel
-                  cells={cells}
-                  onRevert={handleRevert}
-                  reverting={reverting}
-                  onAskAboutCell={handleAskAboutCell}
-                />
+                {/* Chat — docked and sticky, so it stays in view alongside the scrolling
+                    analysis/notebook column instead of living inline in the stack. */}
+                <aside className="lg:sticky lg:top-[4.5rem] lg:h-[calc(100vh-6rem)]">
+                  <ChatPanel
+                    sessionId={session.id}
+                    prefill={chatPrefill}
+                    onPrefillConsumed={handlePrefillConsumed}
+                    className="h-[32rem] lg:h-full"
+                  />
+                </aside>
               </div>
-            </>
-          )}
-        </div>
-      )}
-    </main>
+            )}
+          </div>
+        )}
+      </main>
+    </AuthGuard>
   );
 }
