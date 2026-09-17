@@ -64,6 +64,9 @@ export interface SessionDetail extends SessionSummary {
   plan_steps: string[] | null;
   llm_calls_used: number;
   auto_decide: boolean;
+
+  // Q&A (Phase 7, MASTER_PROMPT.md §5.6, §12)
+  expertise_level: ExpertiseLevel;
 }
 
 export interface PreviewRow {
@@ -115,6 +118,7 @@ export interface NotebookCell {
   execution_count: number | null;
   status: CellStatus;
   error_message: string | null;
+  is_exploratory: boolean;
   created_at: string;
 }
 
@@ -206,6 +210,8 @@ export interface UsageOut {
   calls_used: number;
   calls_budget: number;
   tokens_used: number;
+  cost_used_usd: number;
+  cost_budget_usd: number;
   models_used: string[];
 }
 
@@ -227,5 +233,22 @@ export interface DecisionOut {
   reasoning: string | null;
   auto_decided: boolean;
   allow_free_text: boolean;
+  created_at: string;
+}
+
+// Q&A (Phase 7, MASTER_PROMPT.md §5.6, §8, §12)
+
+export type ExpertiseLevel = "beginner" | "intermediate" | "expert";
+
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessageOut {
+  id: string;
+  session_id: string;
+  role: ChatRole;
+  content: string;
+  referenced_cell_ids: string[] | null;
+  exploratory_cell_id: string | null;
+  degraded: boolean;
   created_at: string;
 }

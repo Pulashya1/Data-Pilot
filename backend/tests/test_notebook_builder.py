@@ -66,6 +66,20 @@ async def test_add_code_cell_increments_position(db_session: AsyncSession) -> No
     assert second.position == 1
 
 
+async def test_add_code_cell_defaults_to_not_exploratory(db_session: AsyncSession) -> None:
+    session = await _make_session(db_session)
+    cell = await builder.add_code_cell(db_session, session.id, "1 + 1", label="A")
+    assert cell.is_exploratory is False
+
+
+async def test_add_code_cell_can_be_marked_exploratory(db_session: AsyncSession) -> None:
+    session = await _make_session(db_session)
+    cell = await builder.add_code_cell(
+        db_session, session.id, "1 + 1", label="Q&A", is_exploratory=True
+    )
+    assert cell.is_exploratory is True
+
+
 async def test_apply_execution_result_success(db_session: AsyncSession) -> None:
     session = await _make_session(db_session)
     cell = await builder.add_code_cell(db_session, session.id, "1 + 1", label="A")

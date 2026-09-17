@@ -1,4 +1,5 @@
-"""Agent run + SSE streaming + decision endpoints (MASTER_PROMPT.md §7, §8, §12 Phase 3/4)."""
+"""Agent run + SSE streaming + decision + Q&A chat endpoints (MASTER_PROMPT.md §7, §8,
+§12 Phase 3/4/7)."""
 
 import asyncio
 import json
@@ -11,7 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.decisions import InvalidAnswerError, get_decision, validate_answer
+from app.agent.deps import NodeDeps
 from app.agent.events import SessionEventBus, get_event_bus
+from app.agent.llm import LLMClient, get_llm_client
+from app.agent.qa import answer_question
 from app.agent.runner import (
     AgentAlreadyRunningError,
     AgentNotWaitingError,
@@ -22,8 +26,17 @@ from app.agent.runner import (
 )
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.core.storage import StorageBackend, get_storage_backend
+from app.execution.backend import ExecutionBackend
+from app.execution.kernel_manager import (
+    KernelManager,
+    get_execution_backend,
+    get_kernel_manager,
+)
+from app.models.chat import ChatMessage
 from app.models.decision import Decision, DecisionKind
-from app.models.session import AgentStatus, UploadSession
+from app.models.session import AgentStatus, SessionStatus, UploadSession
+from app.schemas.chat import AskQuestionRequest, ChatMessageOut
 from app.schemas.decision import AnswerDecisionRequest, DecisionOut, EditPlanRequest
 from app.schemas.events import AgentStatusEvent
 from app.schemas.session import UsageOut
@@ -37,6 +50,13 @@ async def _get_session_or_404(session_id: str, db: AsyncSession) -> UploadSessio
     session = await db.get(UploadSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+async def _get_ready_session_or_404(session_id: str, db: AsyncSession) -> UploadSession:
+    session = await _get_session_or_404(session_id, db)
+    if session.status != SessionStatus.READY or session.profile is None:
+        raise HTTPException(status_code=409, detail="Session is not ready for analysis")
     return session
 
 
@@ -185,5 +205,48 @@ async def get_usage(
         calls_used=session.llm_calls_used,
         calls_budget=settings.llm_max_calls_per_session,
         tokens_used=session.llm_tokens_used,
+        cost_used_usd=session.llm_cost_used_usd,
+        cost_budget_usd=settings.llm_max_cost_per_session_usd,
         models_used=session.llm_models_used or [],
     )
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageOut])
+async def list_messages(
+    session_id: str, db: Annotated[AsyncSession, Depends(get_db)]
+) -> list[ChatMessage]:
+    await _get_session_or_404(session_id, db)
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/sessions/{session_id}/messages", response_model=ChatMessageOut, status_code=201)
+async def post_message(
+    session_id: str,
+    body: AskQuestionRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+    backend: Annotated[ExecutionBackend, Depends(get_execution_backend)],
+    kernel_manager: Annotated[KernelManager, Depends(get_kernel_manager)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    llm_client: Annotated[LLMClient, Depends(get_llm_client)],
+    bus: Annotated[SessionEventBus, Depends(get_event_bus)],
+) -> ChatMessage:
+    """MASTER_PROMPT.md §5.6, §8: ask a question about the dataset, a chart, an insight, a
+    decision, or a specific cell (`@cell-<position>`). Synchronous — see `app.agent.qa`'s
+    module docstring for why this isn't routed through the LangGraph agent run."""
+    session = await _get_ready_session_or_404(session_id, db)
+    deps = NodeDeps(
+        db=db,
+        storage=storage,
+        backend=backend,
+        kernel_manager=kernel_manager,
+        settings=settings,
+        llm_client=llm_client,
+        bus=bus,
+    )
+    return await answer_question(deps, session, body.content)

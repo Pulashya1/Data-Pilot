@@ -17,6 +17,7 @@ export function AnalysisActions({
   const [runningKey, setRunningKey] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [includePipeline, setIncludePipeline] = useState(false);
+  const [includeExploratory, setIncludeExploratory] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function AnalysisActions({
     setExporting(true);
     setError(null);
     try {
-      await exportNotebook(sessionId, false, includePipeline);
+      await exportNotebook(sessionId, false, includePipeline, includeExploratory);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not export notebook.");
     } finally {
@@ -80,6 +81,14 @@ export function AnalysisActions({
               onChange={(e) => setIncludePipeline(e.target.checked)}
             />
             Include fitted pipeline
+          </label>
+          <label className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-400">
+            <input
+              type="checkbox"
+              checked={includeExploratory}
+              onChange={(e) => setIncludeExploratory(e.target.checked)}
+            />
+            Include Q&amp;A cells
           </label>
           <button
             type="button"

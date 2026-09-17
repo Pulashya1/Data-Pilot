@@ -145,9 +145,15 @@ async def export_notebook(
     settings: Annotated[Settings, Depends(get_settings)],
     include_data: bool = False,
     include_pipeline: bool = False,
+    include_exploratory: bool = False,
 ) -> Response:
     session = await _get_ready_session_or_404(session_id, db)
-    cells = await builder.get_cells(db, session_id)
+    all_cells = await builder.get_cells(db, session_id)
+    # MASTER_PROMPT.md §6: exploratory Q&A cells (Phase 7, `NotebookCell.is_exploratory`) are
+    # excluded by default, toggled in with `include_exploratory=true`. Excluded up front, before
+    # the fresh-kernel validation below, so a broken exploratory cell never blocks export of an
+    # otherwise-clean notebook the user didn't ask to include it in.
+    cells = [c for c in all_cells if include_exploratory or not c.is_exploratory]
     code_cells = [c for c in cells if c.cell_type == CellType.CODE]
 
     validation_session_id = f"validate-{session.id}-{uuid4().hex[:8]}"

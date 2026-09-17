@@ -9,7 +9,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -43,4 +43,8 @@ class NotebookCell(Base):
         Enum(CellStatus, native_enum=False), default=CellStatus.PENDING
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Q&A (Phase 7, MASTER_PROMPT.md §5.6, §12): a cell the agent ran to answer a chat question,
+    # not part of the planned EDA/feature-engineering flow. Excluded from `.ipynb` export by
+    # default (`app/notebook/export.py`'s `include_exploratory` flag) — MASTER_PROMPT.md §6.
+    is_exploratory: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

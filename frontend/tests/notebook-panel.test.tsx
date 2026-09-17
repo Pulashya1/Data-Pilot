@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { NotebookPanel } from "@/components/notebook-panel";
 import type { NotebookCell } from "@/types";
 
@@ -15,6 +15,7 @@ function cell(overrides: Partial<NotebookCell>): NotebookCell {
     execution_count: null,
     status: "pending",
     error_message: null,
+    is_exploratory: false,
     created_at: new Date().toISOString(),
     ...overrides,
   };
@@ -96,5 +97,19 @@ describe("NotebookPanel", () => {
     );
     const img = screen.getByRole("img");
     expect(img.getAttribute("src")).toBe("data:image/png;base64,aGVsbG8=");
+  });
+
+  it("badges an exploratory cell", () => {
+    render(<NotebookPanel cells={[cell({ is_exploratory: true })]} />);
+    expect(screen.getByText("exploratory")).toBeTruthy();
+  });
+
+  it("calls onAskAboutCell with the cell's position", () => {
+    const onAskAboutCell = vi.fn();
+    render(
+      <NotebookPanel cells={[cell({ position: 3 })]} onAskAboutCell={onAskAboutCell} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /ask about this cell/i }));
+    expect(onAskAboutCell).toHaveBeenCalledWith(3);
   });
 });

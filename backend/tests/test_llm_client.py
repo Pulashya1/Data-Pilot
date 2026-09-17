@@ -164,6 +164,9 @@ async def test_successful_call_updates_session_usage_and_caches(
     assert session.llm_calls_used == 1
     assert session.llm_tokens_used == 15
     assert session.llm_models_used == ["gemini/gemini-2.0-flash"]
+    # `_FakeModelResponse` isn't a real litellm ModelResponse, so completion_cost can't price
+    # it — degrades to 0.0 rather than raising (see LLMClient._completion_cost).
+    assert session.llm_cost_used_usd == 0.0
 
     # A second, identically-shaped call should hit the Redis cache, not litellm again.
     # (`complete_structured` builds this exact tools payload internally — mirrored here so the
@@ -284,6 +287,62 @@ async def test_budget_exceeded_raises_before_calling_litellm(
             session_id=session.id,
         )
     mock_acompletion.assert_not_awaited()
+
+
+async def test_cost_budget_exceeded_raises_before_calling_litellm(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(llm_max_cost_per_session_usd=0.01)
+    client = LLMClient(settings, FakeRedis())
+    session = await _make_session(db_session)
+    session.llm_cost_used_usd = 0.02  # already over budget from earlier calls this session
+
+    mock_acompletion = AsyncMock()
+    monkeypatch.setattr("app.agent.llm.litellm.acompletion", mock_acompletion)
+
+    with pytest.raises(LLMBudgetExceededError, match="max cost per session reached"):
+        await client.complete_structured(
+            _understand_messages(),
+            ProposeTargetAndProblemType,
+            db=db_session,
+            session_id=session.id,
+        )
+    mock_acompletion.assert_not_awaited()
+
+
+async def test_successful_call_accumulates_real_completion_cost(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings()
+    client = LLMClient(settings, FakeRedis())
+    session = await _make_session(db_session)
+
+    mock_acompletion = AsyncMock(
+        return_value=_tool_response(
+            ProposeTargetAndProblemType,
+            target_column="target",
+            problem_type="binary_classification",
+            reasoning="mocked",
+            confidence="high",
+        )
+    )
+    monkeypatch.setattr("app.agent.llm.litellm.acompletion", mock_acompletion)
+    monkeypatch.setattr("app.agent.llm.litellm.completion_cost", lambda **kwargs: 0.0123)
+
+    await client.complete_structured(
+        _understand_messages(), ProposeTargetAndProblemType, db=db_session, session_id=session.id
+    )
+    assert session.llm_cost_used_usd == pytest.approx(0.0123)
+
+    # A second call accumulates on top of the first rather than overwriting it.
+    monkeypatch.setattr("app.agent.llm.litellm.completion_cost", lambda **kwargs: 0.0050)
+    await client.complete_structured(
+        [{"role": "user", "content": "different prompt, so it's not a cache hit"}],
+        ProposeTargetAndProblemType,
+        db=db_session,
+        session_id=session.id,
+    )
+    assert session.llm_cost_used_usd == pytest.approx(0.0173)
 
 
 async def test_invalid_tool_arguments_are_retried_once_then_succeed(

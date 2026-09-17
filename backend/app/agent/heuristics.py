@@ -1,14 +1,14 @@
-"""Deterministic target/problem-type heuristics (MASTER_PROMPT.md §5.8, §12 Phase 3).
+"""Deterministic target/problem-type/Q&A heuristics (MASTER_PROMPT.md §5.8, §12 Phase 3/7).
 
 Shared by two callers that must never depend on each other: `app/agent/llm.py`'s mock LLM
-(`LLM_MODEL=mock`, §5.8 "Dev mode") and `app/agent/nodes.py`'s `understand` node, which falls
-back to this when every real LLM provider is unavailable (§5.8 graceful degradation). Operates
-on the same compact column dicts `app/agent/context.py` sends to the LLM.
+(`LLM_MODEL=mock`, §5.8 "Dev mode") and, for each heuristic, the real-LLM graceful-degradation
+fallback in `app/agent/nodes.py`'s `understand` node / `app/agent/qa.py`'s `answer_question`.
+Operates on plain dicts, not ORM objects, so it stays independently testable and pure.
 """
 
 from typing import Any, Literal
 
-from app.agent.tools.schemas import ProposeTargetAndProblemType
+from app.agent.tools.schemas import AnswerQuestion, ProposeTargetAndProblemType
 
 _ProblemType = Literal[
     "regression", "binary_classification", "multiclass_classification", "clustering", "time_series"
@@ -75,3 +75,25 @@ def propose_target_and_problem_type(columns: list[dict[str, Any]]) -> ProposeTar
         reasoning="No obvious target column found; recommending unsupervised exploration.",
         confidence="low",
     )
+
+
+def answer_question(
+    question: str, referenced_cells: list[dict[str, Any]], column_names: list[str]
+) -> AnswerQuestion:
+    """Deterministic Q&A fallback (§5.8 mock mode / graceful degradation): never runs new code
+    (a heuristic can't judge whether generated code is safe/correct), just grounds a plain
+    answer in whatever context it was given — a real cell's last output if the question
+    referenced one, otherwise the dataset's column list."""
+    if referenced_cells:
+        parts = [
+            f"Cell '{cell['label'] or cell['cell_type']}' ({cell['status']}): "
+            f"{cell['output_summary'] or 'no output captured'}"
+            for cell in referenced_cells
+        ]
+        answer = " | ".join(parts)
+    else:
+        answer = (
+            f"This dataset has {len(column_names)} column(s): {', '.join(column_names)}. "
+            "Ask about a specific cell (e.g. '@cell-3') or column for more detail."
+        )
+    return AnswerQuestion(answer=answer, needs_computation=False, code=None, cell_purpose=None)

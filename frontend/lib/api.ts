@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
+  ChatMessageOut,
   DecisionOut,
+  ExpertiseLevel,
   KernelStatusOut,
   NotebookCell,
   PreviewResponse,
@@ -140,6 +142,29 @@ export function setAutoDecide(sessionId: string, autoDecide: boolean): Promise<S
   });
 }
 
+export function setExpertiseLevel(
+  sessionId: string,
+  expertiseLevel: ExpertiseLevel,
+): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/${sessionId}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expertise_level: expertiseLevel }),
+  });
+}
+
+export function getMessages(sessionId: string): Promise<ChatMessageOut[]> {
+  return request<ChatMessageOut[]>(`/sessions/${sessionId}/messages`);
+}
+
+export function askQuestion(sessionId: string, content: string): Promise<ChatMessageOut> {
+  return request<ChatMessageOut>(`/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+}
+
 export function revertToCell(sessionId: string, cellId: string): Promise<NotebookCell[]> {
   return request<NotebookCell[]>(`/sessions/${sessionId}/cells/${cellId}/revert`, {
     method: "POST",
@@ -166,9 +191,10 @@ export async function exportNotebook(
   sessionId: string,
   includeData: boolean,
   includePipeline = false,
+  includeExploratory = false,
 ): Promise<void> {
   const res = await fetch(
-    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}&include_pipeline=${includePipeline}`,
+    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}&include_pipeline=${includePipeline}&include_exploratory=${includeExploratory}`,
     { method: "POST", cache: "no-store" },
   );
   if (!res.ok) {

@@ -41,6 +41,35 @@ Agentic EDA & feature engineering assistant. Full spec: `MASTER_PROMPT.md`. Foll
 - `docker compose up --build` — starts Postgres, Redis, MinIO, backend (`:8000`), frontend (`:3000`).
 - Health check: `GET http://localhost:8000/health`
 - The backend container does not auto-run migrations; run `alembic upgrade head` (from `backend/`, or `docker compose exec backend alembic upgrade head`) after first bringing Postgres up.
+- **The containerized `backend` service can run real (non-mock) analysis/agent code** —
+  this needed two fixes, both in place: (1) `/var/run/docker.sock` mounted in (so
+  `docker.from_env()` reaches the host's daemon) plus `KERNEL_HOST_ADDRESS=host.docker.internal`
+  (so the ZMQ connection reaches the relay's host-published ports); (2) `docker_backend.py` no
+  longer passes any host-filesystem path as a bind-mount *source* for the kernel's connection
+  file/seeded dataset — a bind-mount source is always resolved against the Docker **host's**
+  filesystem by the daemon, never the calling container's, so when the backend itself runs in a
+  container, a `tempfile.mkdtemp()` path silently bind-mounts an empty host directory instead
+  (verified experimentally: the kernel died instantly, unable to find its own connection file).
+  Per-session files now go through a per-session named Docker volume, seeded via
+  `Container.put_archive` on a throwaway non-read-only helper container — see
+  `docker_backend.py`'s module docstring for why a direct `put_archive` against the (necessarily
+  read-only, §9) kernel container itself doesn't work either (`400: container rootfs is marked
+  read-only`, a hard Docker Engine API restriction, not fixable via mount configuration).
+  Verified against real Docker both via `pytest -m docker` and by rebuilding the `backend`
+  image and exercising upload → run-template → agent-start through it directly.
+- `docker-compose.yml`'s `minio` service pulls `quay.io/minio/minio:latest`, not
+  `minio/minio:latest` — Docker Hub now rejects anonymous pulls of MinIO's own Hub images
+  outright ("pull access denied"), confirmed by pulling it directly; MinIO still publishes the
+  same images to Quay.io, which allows anonymous pulls.
+- `backend/Dockerfile` is `python:3.12-slim`, not `3.11-slim` — `pyproject.toml`'s
+  `numpy==2.5.3` has no Python 3.11 build at all (requires >=3.12), so `requires-python` there
+  was bumped to match; this only ever surfaced when actually building the Docker image, since
+  local dev/test on this machine already runs Python 3.12 directly.
+- `backend/.dockerignore` and `frontend/.dockerignore` exist and matter: without them,
+  `docker compose up --build` sends `.venv`/`__pycache__`/caches and `node_modules`/`.next` as
+  build context — hundreds of MB to ~1GB per image, multi-minute hangs, and in one observed
+  case a canceled build. `backend/.dockerignore` also excludes `kernel_image`/`relay_image`
+  (built as separate images from their own directories, not needed in the app image's context).
 
 ## Conventions
 - Type hints everywhere (Python); strict TypeScript. Pydantic models at every backend boundary.
@@ -86,6 +115,18 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
   proposal) and the `execute_step` error-repair loop (max 3 attempts). Planning, running
   templates, and the final summary are all deterministic — no LLM call, per §5.5/§5.8 cost
   minimization.
+- **Two independent per-session budgets**, both checked in `LLMClient.complete()` before ever
+  calling `litellm.acompletion`, and both raise the same `LLMBudgetExceededError` (so every
+  existing `except (LLMUnavailableError, LLMBudgetExceededError)` graceful-degradation fallback
+  — `understand_node`, `app/agent/qa.py` — already handles either one, no extra handling
+  needed): call count (`LLM_MAX_CALLS_PER_SESSION`) and USD cost (`LLM_MAX_COST_PER_SESSION_USD`,
+  added once real paid-tier usage was in play — a call-count cap alone doesn't bound spend
+  across models of very different price). Cost per call comes from `litellm.completion_cost`
+  (LiteLLM's own model-pricing table, never hardcoded here — same "never hardcode" rule as
+  model names) via `LLMClient._completion_cost`, which degrades to `0.0` rather than raising if
+  a model isn't in that pricing table. A cache hit costs nothing against either budget (`complete`
+  returns before `_record_usage` runs at all). `UploadSession.llm_cost_used_usd` accumulates
+  across the session; `GET /sessions/{id}/usage` reports it alongside call/token usage.
 - The graph (`app/agent/graph.py`, nodes in `app/agent/nodes.py`) runs `ingest -> understand ->
   plan -> execute_step (loop) -> summarize` end to end automatically, with no pausing — §5.1's
   `interrupt()`-based pauses land in Phase 4 per the §12 phase split. `understand`/`plan` still
@@ -221,7 +262,42 @@ See `MASTER_PROMPT.md` §11 for the full target structure. Not all directories a
     `np.dtype(np.floating)` handling, which shap's `plots/colors/_colorconv.py` hits at *module
     import time* computing an unrelated color constant. 0.52.0 is numpy-2-compatible.
 
+## Q&A (Phase 7)
+- `app/agent/qa.py::answer_question` is a plain async function, **not** a LangGraph node — the
+  main graph (`app/agent/graph.py`) models a fixed pipeline on one checkpointed thread per
+  session, driven by exactly one active task at a time (`app/agent/runner.py`); a chat message
+  needs to be answerable "at any time" (agent running, paused, or done) via a normal synchronous
+  request, not by injecting an event into that single active run. See the module docstring for
+  the full reasoning. `POST /sessions/{id}/messages` (`app/api/agent.py`) calls it directly,
+  building a one-off `NodeDeps` rather than going through `app.agent.deps`'s session-keyed
+  registry (which belongs to the background agent-run task and must not be touched by a
+  concurrent request for the same session).
+- Cell references are `@cell-<position>` (`app.agent.qa.resolve_cell_references`), not
+  `@cell-<id>` as MASTER_PROMPT.md §5.6's example literally reads — `NotebookCell.id` is an
+  opaque UUID, so the frontend's "Ask about this cell" button (`notebook-panel.tsx`) prefills
+  the stable, user-facing `position` instead.
+- Grounding (§5.5/§5.6): referenced cells' code/output take priority; with none referenced,
+  recent `**Insights:**` bullets fill in instead of the whole notebook
+  (`app.agent.context.build_qa_context`). Never the raw dataset.
+- The LLM's structured answer (`app.agent.tools.schemas.AnswerQuestion`) can set
+  `needs_computation`/`code` to run a new cell, flagged `NotebookCell.is_exploratory=True` —
+  excluded from `.ipynb` export by default (`include_exploratory` on
+  `POST /sessions/{id}/notebook/export`, same shape as Phase 6's `include_pipeline`). Skipped
+  (with a text note instead) while `agent_status == RUNNING`: `KernelManager.run_cell` only
+  locks the kernel-*start* path, not the execute call itself, so running QA-triggered code
+  concurrently with the agent's own `execute_step` could race inside the same live kernel —
+  same hazard `revert_to_cell` already guards against for a different reason.
+  `LLM_MODEL=mock` and the LLM-unavailable/budget-exceeded fallback
+  (`app.agent.heuristics.answer_question`) never set `needs_computation` — a deterministic
+  heuristic can't judge whether generated code is safe or correct to run.
+- Expertise level (`UploadSession.expertise_level`, `ExpertiseLevel` enum) adapts the answer
+  prompt's instructions (`app.agent.qa._EXPERTISE_INSTRUCTIONS`); set via
+  `POST /sessions/{id}/settings`, now `{auto_decide?, expertise_level?}` — both optional, so
+  either can be set independently (existing `auto_decide`-only callers are unaffected).
+- `ChatMessage` (`app/models/chat.py`) is one row per turn (user question or assistant answer),
+  not paired, mirroring `NotebookCell`'s one-row-per-fact shape.
+  `GET/POST /sessions/{id}/messages` list/create.
+
 ## Build phases
 Tracked in `MASTER_PROMPT.md` §12. Currently: **Phase 3 (LLM client + agent core)** through
-**Phase 6 (feature engineering & baseline)** complete and passing tests, awaiting review before
-Phase 7.
+**Phase 7 (Q&A)** complete and passing tests, awaiting review before Phase 8.

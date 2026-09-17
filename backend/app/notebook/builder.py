@@ -52,7 +52,7 @@ async def add_markdown_cell(db: AsyncSession, session_id: str, source: str) -> N
 
 
 async def add_code_cell(
-    db: AsyncSession, session_id: str, source: str, *, label: str
+    db: AsyncSession, session_id: str, source: str, *, label: str, is_exploratory: bool = False
 ) -> NotebookCell:
     cell = NotebookCell(
         session_id=session_id,
@@ -61,6 +61,7 @@ async def add_code_cell(
         source=source,
         label=label,
         status=CellStatus.PENDING,
+        is_exploratory=is_exploratory,
     )
     db.add(cell)
     await db.flush()

@@ -35,6 +35,7 @@ from app.execution.kernel_manager import (  # noqa: E402
     get_kernel_manager,
 )
 from app.main import app  # noqa: E402
+from app.models.chat import ChatMessage  # noqa: E402
 from app.models.decision import Decision  # noqa: E402
 from app.models.notebook import NotebookCell  # noqa: E402
 from app.models.session import UploadSession  # noqa: E402
@@ -84,6 +85,7 @@ def _setup_database() -> Generator[None]:
 async def _clean_sessions_table() -> AsyncGenerator[None]:
     yield
     async with _TestSessionLocal() as session:
+        await session.execute(delete(ChatMessage))
         await session.execute(delete(NotebookCell))
         await session.execute(delete(Decision))
         await session.execute(delete(UploadSession))

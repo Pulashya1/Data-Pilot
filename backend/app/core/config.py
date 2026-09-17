@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     ollama_api_base: str = "http://localhost:11434"
     llm_max_calls_per_session: int = 150
+    # §5.8: on a paid provider tier, the call-count cap alone no longer protects a wallet from
+    # a stuck retry loop or a runaway session — this is the dollar-denominated backstop for
+    # that, checked and accumulated the same way in LLMClient.complete().
+    llm_max_cost_per_session_usd: float = 0.50
     llm_rpm_limit: int = 10
     llm_tpm_limit: int = 200_000
     llm_cache_ttl_seconds: int = 86_400
@@ -47,6 +51,16 @@ class Settings(BaseSettings):
     kernel_idle_timeout_minutes: int = 30
     kernel_cell_timeout_seconds: int = 120
     kernel_startup_timeout_seconds: int = 60
+    # The relay container's 5 ZMQ ports are published to the *host's* 127.0.0.1
+    # (docker_backend.py's module docstring), which only that literal address reaches when
+    # the backend process itself also runs directly on the host. When the backend instead
+    # runs inside a container (docker-compose.yml), its own "127.0.0.1" is its own loopback,
+    # not the host's — override this to "host.docker.internal" (Docker Desktop resolves it to
+    # the host automatically; docker-compose.yml also adds the Linux `host-gateway` fallback).
+    kernel_host_address: str = "127.0.0.1"
+
+    # Q&A (Phase 7, MASTER_PROMPT.md §5.5/§5.6)
+    qa_max_output_chars: int = 2000
 
     # App
     env: str = "development"

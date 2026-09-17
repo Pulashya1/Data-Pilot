@@ -153,6 +153,7 @@ Keep the system prompt concise (it is sent on every call and costs tokens on the
 - **Graceful degradation:** If all models are rate-limited, the UI shows a clear "Waiting for LLM capacity…" status with a countdown. The session state is preserved and resumes automatically.
 - **Caching:** Cache LLM responses for identical prompts (keyed by a hash of model + messages + tools) in Redis with a TTL, which is useful during development and repeated runs.
 - **Call budget:** Configurable maximum number of LLM calls per session (`LLM_MAX_CALLS_PER_SESSION`). Show usage in a small indicator in the UI.
+- **Cost budget:** On a paid provider tier, a call-count cap alone doesn't bound spend — a cheap model could stay well under it while an expensive one blows past a dollar limit first. Configurable maximum USD cost per session (`LLM_MAX_COST_PER_SESSION_USD`), computed via LiteLLM's own per-model pricing (never hardcode provider pricing) and checked the same way as the call budget; exceeding either raises the same budget-exceeded condition.
 - **Dev mode:** `LLM_MODEL=mock` uses a deterministic fake LLM for tests and UI development, consuming no quota.
 - **Privacy note:** Free tiers may use prompts to improve provider models. Show a one-line notice on the upload page, and recommend public or non-sensitive datasets.
 
@@ -212,12 +213,13 @@ Define typed event schemas shared with the frontend (generate TypeScript types f
 
 ### `.env.example` must include
 ```
-LLM_MODEL=gemini/<current-gemini-flash-model>
+LLM_MODEL=deepseek/<current-deepseek-chat-model>
 LLM_FALLBACKS=groq/<groq-model>
-GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
 GROQ_API_KEY=
 OLLAMA_API_BASE=http://localhost:11434
 LLM_MAX_CALLS_PER_SESSION=150
+LLM_MAX_COST_PER_SESSION_USD=0.50
 LLM_RPM_LIMIT=10
 LLM_TPM_LIMIT=200000
 LLM_CACHE_TTL_SECONDS=86400

@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.git
+# Built as separate images from their own directories (see CLAUDE.md); not needed inside the
+# backend app image itself.
+kernel_image
+relay_image

@@ -74,10 +74,12 @@ function CellCard({
   cell,
   onRevert,
   reverting,
+  onAskAboutCell,
 }: {
   cell: NotebookCell;
   onRevert?: (cellId: string) => void;
   reverting: boolean;
+  onAskAboutCell?: (position: number) => void;
 }) {
   if (cell.cell_type === "markdown") {
     return (
@@ -90,8 +92,24 @@ function CellCard({
   return (
     <div className="rounded-lg border border-neutral-200 dark:border-neutral-800">
       <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-1.5 dark:border-neutral-800">
-        <span className="text-xs font-medium text-neutral-500">{cell.label ?? "Code"}</span>
+        <span className="flex items-center gap-1.5 text-xs font-medium text-neutral-500">
+          {cell.label ?? "Code"}
+          {cell.is_exploratory && (
+            <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[9px] font-medium uppercase text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+              exploratory
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-2">
+          {onAskAboutCell && (
+            <button
+              type="button"
+              onClick={() => onAskAboutCell(cell.position)}
+              className="text-[10px] font-medium text-neutral-500 underline hover:text-neutral-900 dark:hover:text-neutral-100"
+            >
+              Ask about this cell
+            </button>
+          )}
           {onRevert && (
             <button
               type="button"
@@ -136,10 +154,12 @@ export function NotebookPanel({
   cells,
   onRevert,
   reverting = false,
+  onAskAboutCell,
 }: {
   cells: NotebookCell[];
   onRevert?: (cellId: string) => void;
   reverting?: boolean;
+  onAskAboutCell?: (position: number) => void;
 }) {
   if (cells.length === 0) {
     return (
@@ -151,7 +171,13 @@ export function NotebookPanel({
   return (
     <div className="flex flex-col gap-3">
       {cells.map((cell) => (
-        <CellCard key={cell.id} cell={cell} onRevert={onRevert} reverting={reverting} />
+        <CellCard
+          key={cell.id}
+          cell={cell}
+          onRevert={onRevert}
+          reverting={reverting}
+          onAskAboutCell={onAskAboutCell}
+        />
       ))}
     </div>
   );

@@ -182,11 +182,16 @@ async def update_session_settings(
     body: SessionSettingsRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadSession:
-    """MASTER_PROMPT.md §5.4/§7: the per-session "let the agent decide" toggle. Only affects
-    decisions reached *after* this call — one already paused and awaiting the user keeps
-    waiting for an explicit answer rather than silently auto-resolving."""
+    """MASTER_PROMPT.md §5.4/§7: the per-session "let the agent decide" toggle, and (Phase 7)
+    the expertise level `app.agent.qa` adapts its answers to. Only affects decisions reached
+    *after* this call — one already paused and awaiting the user keeps waiting for an explicit
+    answer rather than silently auto-resolving. Both fields are optional so either can be set
+    independently."""
     session = await _get_session_or_404(session_id, db)
-    session.auto_decide = body.auto_decide
+    if body.auto_decide is not None:
+        session.auto_decide = body.auto_decide
+    if body.expertise_level is not None:
+        session.expertise_level = body.expertise_level
     await db.commit()
     return session
 

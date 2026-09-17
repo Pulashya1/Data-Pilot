@@ -4,9 +4,10 @@ Every kernel runs as two containers, built from `backend/kernel_image/` and
 `backend/relay_image/`:
 
 - **kernel**: attached only to an internal (no-internet) Docker network, read-only root
-  filesystem, non-root user, CPU/memory limits. It cannot reach anything outside that
-  network — verified experimentally: a container on an `internal=True` Docker network has
-  no outbound route at all, not even to the host.
+  filesystem except a `tmpfs` at `/home/kernel/work` (see below) and `/tmp`, non-root user,
+  CPU/memory limits. It cannot reach anything outside that network — verified experimentally:
+  a container on an `internal=True` Docker network has no outbound route at all, not even to
+  the host.
 - **relay**: a small, fixed `socat` process (never runs user code) that sits on both the
   internal network and a public one, forwarding the 5 Jupyter ZMQ ports. It's the only way
   the host can reach the kernel; published ports are bound to `127.0.0.1` only. Docker only
@@ -14,19 +15,44 @@ Every kernel runs as two containers, built from `backend/kernel_image/` and
   and isn't internal* — so the relay is created on the public network first, and the
   internal network is attached afterward via `network.connect()`.
 
+**Per-session files (connection file, seeded dataset) go through a per-session named Docker
+volume, populated via `Container.put_archive` on a throwaway helper container — never a host
+bind mount.** A bind mount's *source* path is always resolved by the Docker daemon against the
+**host's** filesystem, never the caller's — fine when this backend process itself runs directly
+on the host, but when it runs inside the `backend` container (`docker compose`), a
+`tempfile.mkdtemp()` path lives only in that container's own filesystem, so the daemon would
+silently bind-mount an empty host directory instead (verified experimentally: the kernel then
+dies instantly, unable to find its own connection file). `put_archive` goes over the same
+Docker API/socket connection this module already uses for everything else, so it works
+identically regardless of where the calling process runs — but it turns out the Docker Engine
+API unconditionally rejects `put_archive` against *any* container whose rootfs is
+`read_only=True`, even targeting a separate writable mount within it (`400 Bad Request:
+"container rootfs is marked read-only"`, verified experimentally against Docker Engine
+28.5.2/API v1.51) — so it can't write directly into the (necessarily read-only, §9) kernel
+container. Instead, `_seed_work_volume` creates a per-session named volume, mounts it (as the
+sole volume) into a throwaway, non-read-only container that is created but never started, uses
+`put_archive` against *that* container, then removes it — the data persists in the volume
+independently of any one container. The real kernel container then mounts that same
+pre-populated volume, read-write, at `/home/kernel/work`, with its own rootfs still
+`read_only=True`. It's launched with an explicit `command=` override pointing `-f` at
+`/home/kernel/work/connection.json` rather than the image's default `/home/kernel/
+connection.json` (under the read-only root), so no image rebuild is needed for this.
+
 The backend talks to the kernel over ZMQ via `jupyter_client`'s `BlockingKernelClient`,
 run inside `asyncio.to_thread` since it's a blocking API.
 """
 
 import asyncio
 import contextlib
+import io
 import json
 import secrets
 import shutil
 import socket
+import tarfile
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from queue import Empty
 from typing import Any
 from uuid import uuid4
@@ -38,6 +64,9 @@ from jupyter_client import BlockingKernelClient
 from app.core.config import Settings
 from app.execution.backend import KernelHandle, KernelStartupError
 from app.schemas.execution import ExecutionResult, ExecutionStatus
+
+_KERNEL_WORKDIR = "/home/kernel/work"
+_KERNEL_CONNECTION_FILE = f"{_KERNEL_WORKDIR}/connection.json"
 
 _CONNECTION_PORT_NAMES = ("shell_port", "iopub_port", "stdin_port", "control_port", "hb_port")
 
@@ -64,6 +93,32 @@ class DockerJupyterBackend:
         if self._client is None:
             self._client = docker.from_env()
         return self._client
+
+    @staticmethod
+    def _archive_of(files: dict[str, bytes]) -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for arcname, content in files.items():
+                info = tarfile.TarInfo(name=arcname)
+                info.size = len(content)
+                info.mode = 0o644
+                tar.addfile(info, io.BytesIO(content))
+        return buf.getvalue()
+
+    def _seed_work_volume(self, volume_name: str, files: dict[str, bytes]) -> None:
+        """Writes `files` (arcname -> content, relative to `/home/kernel/work`) into
+        `volume_name` via a throwaway, non-read-only container — see the module docstring for
+        why a container can't `put_archive` into its own mount when *it* is read-only."""
+        client = self._docker()
+        seeder = client.containers.create(
+            self._settings.kernel_image,
+            command=["true"],
+            volumes={volume_name: {"bind": _KERNEL_WORKDIR, "mode": "rw"}},
+        )
+        try:
+            seeder.put_archive(_KERNEL_WORKDIR, self._archive_of(files))
+        finally:
+            self._force_remove(seeder)
 
     def _ensure_networks(self) -> None:
         client = self._docker()
@@ -124,9 +179,10 @@ class DockerJupyterBackend:
         ports = _free_ports(5)
         key = secrets.token_hex(32)
 
+        # Only needed now for `host_conn_path` (read directly by this process's own
+        # BlockingKernelClient below, never touches a container mount) — the kernel's own
+        # connection file and work directory are injected via `_put_files` instead.
         workdir = Path(tempfile.mkdtemp(prefix=f"datapilot-kernel-{session_id}-"))
-        work_mount = workdir / "work"
-        work_mount.mkdir()
 
         base_conn: dict[str, Any] = dict(zip(_CONNECTION_PORT_NAMES, ports, strict=True))
         base_conn.update(
@@ -137,10 +193,10 @@ class DockerJupyterBackend:
                 "kernel_name": "python3",
             }
         )
-        container_conn_path = workdir / "container_connection.json"
         host_conn_path = workdir / "host_connection.json"
-        container_conn_path.write_text(json.dumps({**base_conn, "ip": "0.0.0.0"}))
-        host_conn_path.write_text(json.dumps({**base_conn, "ip": "127.0.0.1"}))
+        host_conn_path.write_text(
+            json.dumps({**base_conn, "ip": self._settings.kernel_host_address})
+        )
 
         # Container names double as the DNS name the relay resolves to reach the kernel
         # (`RELAY_TARGET` below), so they must fit in a single 63-character DNS label —
@@ -149,24 +205,39 @@ class DockerJupyterBackend:
         suffix = uuid4().hex
         kernel_name = f"dp-kernel-{suffix}"
         relay_name = f"dp-relay-{suffix}"
+        volume_name = f"dp-work-{suffix}"
         labels = {"datapilot.session_id": session_id}
 
-        kernel_container = docker_client.containers.run(
-            self._settings.kernel_image,
-            detach=True,
-            name=kernel_name,
-            network=self._settings.kernel_network_internal,
-            read_only=True,
-            tmpfs={"/tmp": "size=512m"},
-            user="1000:1000",
-            mem_limit=self._settings.kernel_memory_limit,
-            nano_cpus=int(self._settings.kernel_cpu_limit * 1_000_000_000),
-            volumes={
-                str(container_conn_path): {"bind": "/home/kernel/connection.json", "mode": "rw"},
-                str(work_mount): {"bind": "/home/kernel/work", "mode": "rw"},
-            },
-            labels={**labels, "datapilot.role": "kernel"},
-        )
+        volume = docker_client.volumes.create(volume_name, labels=labels)
+        kernel_container = None
+        try:
+            self._seed_work_volume(
+                volume_name,
+                {"connection.json": json.dumps({**base_conn, "ip": "0.0.0.0"}).encode()},
+            )
+            kernel_container = docker_client.containers.create(
+                self._settings.kernel_image,
+                # Overrides the image's default `-f /home/kernel/connection.json` (under the
+                # read-only root) to point at the pre-seeded volume instead — module docstring.
+                command=["python", "-m", "ipykernel_launcher", "-f", _KERNEL_CONNECTION_FILE],
+                name=kernel_name,
+                network=self._settings.kernel_network_internal,
+                read_only=True,
+                tmpfs={"/tmp": "size=512m"},
+                volumes={volume_name: {"bind": _KERNEL_WORKDIR, "mode": "rw"}},
+                user="1000:1000",
+                mem_limit=self._settings.kernel_memory_limit,
+                nano_cpus=int(self._settings.kernel_cpu_limit * 1_000_000_000),
+                labels={**labels, "datapilot.role": "kernel"},
+            )
+            kernel_container.start()
+        except Exception:
+            if kernel_container is not None:
+                self._force_remove(kernel_container)
+            with contextlib.suppress(docker.errors.APIError):
+                volume.remove(force=True)
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
 
         try:
             relay_container = docker_client.containers.run(
@@ -186,6 +257,8 @@ class DockerJupyterBackend:
             )
         except Exception:
             self._force_remove(kernel_container)
+            with contextlib.suppress(docker.errors.APIError):
+                volume.remove(force=True)
             shutil.rmtree(workdir, ignore_errors=True)
             raise
 
@@ -199,6 +272,8 @@ class DockerJupyterBackend:
                 client.stop_channels()
             self._force_remove(kernel_container)
             self._force_remove(relay_container)
+            with contextlib.suppress(docker.errors.APIError):
+                volume.remove(force=True)
             shutil.rmtree(workdir, ignore_errors=True)
             raise KernelStartupError(
                 f"Kernel for session {session_id} did not become ready"
@@ -210,9 +285,9 @@ class DockerJupyterBackend:
             state={
                 "kernel_container_id": kernel_container.id,
                 "relay_container_id": relay_container.id,
+                "volume_name": volume_name,
                 "client": client,
                 "workdir": str(workdir),
-                "work_mount": str(work_mount),
             },
         )
 
@@ -298,12 +373,15 @@ class DockerJupyterBackend:
         return status, outputs, execution_count, error_message, aborted
 
     def _write_file_sync(self, handle: KernelHandle, relative_path: str, content: bytes) -> None:
-        work_mount = Path(handle.state["work_mount"])
-        target = (work_mount / relative_path).resolve()
-        if work_mount.resolve() not in target.parents:
+        normalized = PurePosixPath(relative_path.replace("\\", "/"))
+        if normalized.is_absolute() or ".." in normalized.parts:
             raise ValueError(f"Refusing to write outside kernel work directory: {relative_path}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
+        # Can't `put_archive` the running kernel container directly — its rootfs is
+        # read_only=True and the Docker API refuses that unconditionally (module docstring) —
+        # so this goes through the same volume-seeding helper `_start_kernel_sync` uses. The
+        # volume is mounted read-write into both the throwaway seeder and the live kernel
+        # container at once; Docker volumes support concurrent mounts like this natively.
+        self._seed_work_volume(handle.state["volume_name"], {str(normalized): content})
 
     def _interrupt_sync(self, handle: KernelHandle) -> None:
         with contextlib.suppress(docker.errors.NotFound, docker.errors.APIError):
@@ -325,6 +403,10 @@ class DockerJupyterBackend:
             container_id = handle.state.get(key)
             if container_id:
                 self._force_remove_by_id(container_id)
+        volume_name = handle.state.get("volume_name")
+        if volume_name:
+            with contextlib.suppress(docker.errors.NotFound, docker.errors.APIError):
+                self._docker().volumes.get(volume_name).remove(force=True)
         workdir = handle.state.get("workdir")
         if workdir:
             shutil.rmtree(workdir, ignore_errors=True)

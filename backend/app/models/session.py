@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -43,6 +43,12 @@ class AgentStatus(str, enum.Enum):
     ERROR = "error"
 
 
+class ExpertiseLevel(str, enum.Enum):
+    BEGINNER = "beginner"
+    INTERMEDIATE = "intermediate"
+    EXPERT = "expert"
+
+
 class UploadSession(Base):
     __tablename__ = "sessions"
 
@@ -77,6 +83,10 @@ class UploadSession(Base):
     llm_calls_used: Mapped[int] = mapped_column(Integer, default=0)
     llm_tokens_used: Mapped[int] = mapped_column(Integer, default=0)
     llm_models_used: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # §5.8: cumulative USD cost of this session's real LLM calls, via litellm.completion_cost
+    # (LLMClient._record_usage) — checked against Settings.llm_max_cost_per_session_usd the
+    # same way llm_calls_used is checked against llm_max_calls_per_session.
+    llm_cost_used_usd: Mapped[float] = mapped_column(Float, default=0.0)
 
     # Human-in-the-loop (Phase 4, MASTER_PROMPT.md §5.4, §12)
     auto_decide: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -86,6 +96,11 @@ class UploadSession(Base):
     # the storage key of the last fitted preprocessing Pipeline, joblib-serialized, used by the
     # notebook export endpoint to optionally include `pipeline.joblib`.
     pipeline_storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # Q&A (Phase 7, MASTER_PROMPT.md §5.6, §12): adapts `app.agent.qa`'s answer prompt.
+    expertise_level: Mapped[ExpertiseLevel] = mapped_column(
+        Enum(ExpertiseLevel, native_enum=False), default=ExpertiseLevel.INTERMEDIATE
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

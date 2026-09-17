@@ -2,7 +2,9 @@
 name = "datapilot-backend"
 version = "0.1.0"
 description = "DataPilot backend: agentic EDA & feature engineering assistant API"
-requires-python = ">=3.11"
+# numpy==2.5.3 below has no Python 3.11 build (requires >=3.12); MASTER_PROMPT.md §2 says
+# "3.11+" but that's no longer actually satisfiable — see backend/Dockerfile's matching pin.
+requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.115.0",
     "uvicorn[standard]==0.30.6",

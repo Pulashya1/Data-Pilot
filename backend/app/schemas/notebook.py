@@ -19,6 +19,7 @@ class NotebookCellOut(BaseModel):
     execution_count: int | None
     status: CellStatus
     error_message: str | None
+    is_exploratory: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

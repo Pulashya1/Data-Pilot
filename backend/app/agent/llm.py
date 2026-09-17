@@ -30,7 +30,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import heuristics
-from app.agent.tools.schemas import CodeRepair, ProposeTargetAndProblemType
+from app.agent.tools.schemas import AnswerQuestion, CodeRepair, ProposeTargetAndProblemType
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.core.redis import RedisLike, get_redis_client
@@ -49,10 +49,10 @@ class LLMUnavailableError(RuntimeError):
 
 
 class LLMBudgetExceededError(RuntimeError):
-    """The session has hit `LLM_MAX_CALLS_PER_SESSION`."""
+    """The session has hit `LLM_MAX_CALLS_PER_SESSION` or `LLM_MAX_COST_PER_SESSION_USD`."""
 
-    def __init__(self, session_id: str) -> None:
-        super().__init__(f"Session {session_id} has exceeded its LLM call budget.")
+    def __init__(self, session_id: str, reason: str) -> None:
+        super().__init__(f"Session {session_id} has exceeded its LLM budget ({reason}).")
         self.session_id = session_id
 
 
@@ -158,6 +158,12 @@ class LLMClient:
                 explanation="mock repair (LLM_MODEL=mock): replaced the failing cell with a no-op.",
             )
             return cast(T, repair)
+        if response_model is AnswerQuestion:
+            payload = json.loads(messages[-1]["content"])
+            answer = heuristics.answer_question(
+                payload["question"], payload["referenced_cells"], payload["column_names"]
+            )
+            return cast(T, answer)
         raise NotImplementedError(f"mock LLM has no handler for {response_model.__name__}")
 
     @staticmethod
@@ -191,7 +197,9 @@ class LLMClient:
         if session is None:
             raise ValueError(f"Unknown session {session_id!r}")
         if session.llm_calls_used >= self._settings.llm_max_calls_per_session:
-            raise LLMBudgetExceededError(session_id)
+            raise LLMBudgetExceededError(session_id, "max calls per session reached")
+        if session.llm_cost_used_usd >= self._settings.llm_max_cost_per_session_usd:
+            raise LLMBudgetExceededError(session_id, "max cost per session reached")
 
         models = [self._settings.llm_model, *self._fallback_models()]
         cache_key = self._cache_key(models[0], messages, tools)
@@ -229,7 +237,8 @@ class LLMClient:
                 await self._redis.set(
                     cache_key, result.model_dump_json(), ex=self._settings.llm_cache_ttl_seconds
                 )
-                self._record_usage(session, model, result.usage)
+                cost_usd = self._completion_cost(raw, model)
+                self._record_usage(session, model, result.usage, cost_usd)
                 await db.flush()
                 logger.info(
                     "llm_call",
@@ -237,6 +246,7 @@ class LLMClient:
                     latency_ms=(time.monotonic() - start) * 1000,
                     prompt_tokens=result.usage.prompt_tokens,
                     completion_tokens=result.usage.completion_tokens,
+                    cost_usd=cost_usd,
                     retries=attempt,
                     fallback_used=model_index > 0,
                 )
@@ -255,9 +265,22 @@ class LLMClient:
         return delay
 
     @staticmethod
-    def _record_usage(session: UploadSession, model: str, usage: LLMUsage) -> None:
+    def _completion_cost(raw: Any, model: str) -> float:
+        """USD cost of one real call, via LiteLLM's own model-pricing table — never hardcode
+        per-provider pricing here (same "never hardcode" rule as model names, CLAUDE.md).
+        Degrades to 0.0 (never blocks a real response over a best-effort cost estimate) if the
+        model isn't in LiteLLM's cost map or the calculation otherwise fails."""
+        try:
+            return float(litellm.completion_cost(completion_response=raw, model=model))
+        except Exception as exc:  # noqa: BLE001 - third-party pricing lookup, see docstring
+            logger.warning("llm_cost_calculation_failed", model=model, error=str(exc))
+            return 0.0
+
+    @staticmethod
+    def _record_usage(session: UploadSession, model: str, usage: LLMUsage, cost_usd: float) -> None:
         session.llm_calls_used += 1
         session.llm_tokens_used += usage.prompt_tokens + usage.completion_tokens
+        session.llm_cost_used_usd += cost_usd
         models_used = set(session.llm_models_used or [])
         models_used.add(model)
         session.llm_models_used = sorted(models_used)

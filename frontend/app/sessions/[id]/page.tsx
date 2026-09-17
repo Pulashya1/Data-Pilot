@@ -11,11 +11,13 @@ import {
   revertToCell,
   selectSheet,
   setAutoDecide,
+  setExpertiseLevel,
   startAgent,
   subscribeToAgentStream,
 } from "@/lib/api";
 import { AgentStatusBar } from "@/components/agent-status";
 import { AnalysisActions } from "@/components/analysis-actions";
+import { ChatPanel } from "@/components/chat-panel";
 import { ColumnStatsTable } from "@/components/column-stats-table";
 import { DataQualityScoreCard } from "@/components/data-quality-score";
 import { DecisionCard } from "@/components/decision-card";
@@ -28,6 +30,7 @@ import type {
   AgentEvent,
   AgentStatus,
   DecisionOut,
+  ExpertiseLevel,
   InsightEvent,
   LLMStatusEvent,
   NotebookCell,
@@ -100,6 +103,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
   const [insights, setInsights] = useState<InsightEvent[]>([]);
   const [decisions, setDecisions] = useState<DecisionOut[]>([]);
   const [reverting, setReverting] = useState(false);
+  const [chatPrefill, setChatPrefill] = useState<string | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -246,6 +250,26 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
     [id],
   );
 
+  const handleExpertiseLevelChange = useCallback(
+    async (level: ExpertiseLevel) => {
+      try {
+        const updated = await setExpertiseLevel(id, level);
+        setSession(updated);
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Could not update settings.");
+      }
+    },
+    [id],
+  );
+
+  const handleAskAboutCell = useCallback((position: number) => {
+    setChatPrefill(`@cell-${position}`);
+  }, []);
+
+  const handlePrefillConsumed = useCallback(() => {
+    setChatPrefill(null);
+  }, []);
+
   const pendingDecision = decisions.find((d) => d.selected_option === null) ?? null;
 
   return (
@@ -310,6 +334,20 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                   <h2 className="text-sm font-medium">Agent</h2>
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
+                      Explain like I&apos;m
+                      <select
+                        value={session.expertise_level}
+                        onChange={(e) =>
+                          void handleExpertiseLevelChange(e.target.value as ExpertiseLevel)
+                        }
+                        className="rounded-md border border-neutral-300 bg-transparent px-1 py-0.5 text-xs dark:border-neutral-700"
+                      >
+                        <option value="beginner">a beginner</option>
+                        <option value="intermediate">intermediate</option>
+                        <option value="expert">an expert</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
                       <input
                         type="checkbox"
                         checked={session.auto_decide}
@@ -347,9 +385,20 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 <DecisionsPanel decisions={decisions} />
               </div>
 
+              <ChatPanel
+                sessionId={session.id}
+                prefill={chatPrefill}
+                onPrefillConsumed={handlePrefillConsumed}
+              />
+
               <div>
                 <h2 className="mb-2 text-lg font-medium">Notebook</h2>
-                <NotebookPanel cells={cells} onRevert={handleRevert} reverting={reverting} />
+                <NotebookPanel
+                  cells={cells}
+                  onRevert={handleRevert}
+                  reverting={reverting}
+                  onAskAboutCell={handleAskAboutCell}
+                />
               </div>
             </>
           )}

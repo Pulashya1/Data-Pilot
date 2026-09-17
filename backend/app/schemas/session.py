@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.models.session import AgentStatus, FileType, ProblemType, SessionStatus
+from app.models.session import AgentStatus, ExpertiseLevel, FileType, ProblemType, SessionStatus
 from app.schemas.dataset import DatasetProfile
 
 
@@ -37,19 +37,25 @@ class SessionDetail(SessionSummary):
     llm_calls_used: int
     auto_decide: bool
 
+    # Q&A (Phase 7)
+    expertise_level: ExpertiseLevel
+
 
 class SheetSelectionRequest(BaseModel):
     sheet_name: str
 
 
 class SessionSettingsRequest(BaseModel):
-    auto_decide: bool
+    auto_decide: bool | None = None
+    expertise_level: ExpertiseLevel | None = None
 
 
 class UsageOut(BaseModel):
     calls_used: int
     calls_budget: int
     tokens_used: int
+    cost_used_usd: float
+    cost_budget_usd: float
     models_used: list[str]
 
 
