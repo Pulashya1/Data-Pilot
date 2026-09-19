@@ -51,13 +51,11 @@ questions about the data or any step at any time.
 
 A full walkthrough (sign in → upload → agent run → decisions → chat → export), screen-recorded.
 
-Save your recording as `docs/demo.mp4` and it will play inline here:
+[![Watch the demo](docs/screenshots/upload.png)](docs/demo.mp4)
 
-<video src="docs/demo.mp4" controls width="100%"></video>
-
-> GitHub renders the `<video>` tag above as an inline player once `docs/demo.mp4` exists in the
-> repo. If a renderer you're using shows only a link instead, convert the clip to a GIF and use
-> `![Demo](docs/demo.gif)` instead for a guaranteed-inline preview everywhere.
+Click the thumbnail above (or [this link](docs/demo.mp4)) to open `docs/demo.mp4` in GitHub's
+own file viewer, which plays it inline with full controls — GitHub doesn't render a raw
+`<video>` HTML tag in READMEs, so a clickable link to the file is the reliable way to embed one.
 
 ## Screenshots
 
