@@ -51,11 +51,12 @@ questions about the data or any step at any time.
 
 A full walkthrough (sign in → upload → agent run → decisions → chat → export), screen-recorded.
 
-<video src="https://raw.githubusercontent.com/Pulashya1/Data-Pilot/master/docs/demo.mp4" controls width="100%"></video>
+[![Watch the demo](docs/screenshots/upload.png)](docs/demo.mp4)
 
-Plays inline above. (A `<video>` tag only renders inline on GitHub when its `src` is a
-fully-qualified URL — a relative path like `docs/demo.mp4` doesn't resolve, which is why it
-didn't show up before. If it ever doesn't render for you, [open the file directly](https://raw.githubusercontent.com/Pulashya1/Data-Pilot/master/docs/demo.mp4).)
+**[▶ Watch the demo video](docs/demo.mp4)** — click the thumbnail or this link to open it in
+GitHub's file viewer, which plays it inline with full controls. (GitHub's README renderer
+strips raw `<video>` HTML tags entirely, even with an absolute URL, so a link to the file is
+the only reliable way to embed one without leaving the page open in a new tab.)
 
 ## Screenshots
 
@@ -63,10 +64,28 @@ didn't show up before. If it ever doesn't render for you, [open the file directl
 |---|---|
 | Login page — email input, "Send magic link" | `docs/screenshots/login.png` |
 | Upload page — the dropzone for uploading a dataset | `docs/screenshots/upload.png` |
+| Sessions list | `docs/screenshots/sessions-list.png` |
+| Session workspace — data quality, column stats, and the chat panel answering a question | `docs/screenshots/data-quality-chat.png` |
+| "Run analysis" panel and the agent paused on a feature-engineering decision | `docs/screenshots/agent-decisions.png` |
+| Notebook panel — generated cells (imports, config, data loading) | `docs/screenshots/notebook-panel.png` |
+| Notebook panel — a correlation analysis cell with its heatmap output | `docs/screenshots/notebook-correlation.png` |
+| Chat panel — a cell-grounded answer (`@cell-N` reference) | `docs/screenshots/chat-panel.png` |
 
 ![Login page](docs/screenshots/login.png)
 
 ![Upload page](docs/screenshots/upload.png)
+
+![Sessions list](docs/screenshots/sessions-list.png)
+
+![Data quality and chat](docs/screenshots/data-quality-chat.png)
+
+![Agent decisions](docs/screenshots/agent-decisions.png)
+
+![Notebook panel](docs/screenshots/notebook-panel.png)
+
+![Notebook correlation heatmap](docs/screenshots/notebook-correlation.png)
+
+![Chat panel](docs/screenshots/chat-panel.png)
 
 ## Architecture
 
