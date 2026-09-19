@@ -51,11 +51,11 @@ questions about the data or any step at any time.
 
 A full walkthrough (sign in → upload → agent run → decisions → chat → export), screen-recorded.
 
-[![Watch the demo](docs/screenshots/upload.png)](docs/demo.mp4)
+<video src="https://raw.githubusercontent.com/Pulashya1/Data-Pilot/master/docs/demo.mp4" controls width="100%"></video>
 
-Click the thumbnail above (or [this link](docs/demo.mp4)) to open `docs/demo.mp4` in GitHub's
-own file viewer, which plays it inline with full controls — GitHub doesn't render a raw
-`<video>` HTML tag in READMEs, so a clickable link to the file is the reliable way to embed one.
+Plays inline above. (A `<video>` tag only renders inline on GitHub when its `src` is a
+fully-qualified URL — a relative path like `docs/demo.mp4` doesn't resolve, which is why it
+didn't show up before. If it ever doesn't render for you, [open the file directly](https://raw.githubusercontent.com/Pulashya1/Data-Pilot/master/docs/demo.mp4).)
 
 ## Screenshots
 
