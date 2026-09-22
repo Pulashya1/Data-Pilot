@@ -4,6 +4,7 @@ import { FileUp, UploadCloud } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { ApiError, selectSheet, uploadSession } from "@/lib/api";
+import { SignalMeter } from "@/components/ui/signal-meter";
 import { cn } from "@/lib/utils";
 import type { SessionDetail } from "@/types";
 
@@ -28,6 +29,8 @@ export function UploadDropzone() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingSheetSession, setPendingSheetSession] = useState<SessionDetail | null>(null);
   const [selectedSheet, setSelectedSheet] = useState<string | null>(null);
@@ -40,8 +43,10 @@ export function UploadDropzone() {
         return;
       }
       setIsUploading(true);
+      setFileName(file.name);
+      setProgress(0);
       try {
-        const session = await uploadSession(file);
+        const session = await uploadSession(file, setProgress);
         if (session.status === "needs_sheet_selection") {
           setPendingSheetSession(session);
           setSelectedSheet(session.sheet_names?.[0] ?? null);
@@ -51,9 +56,10 @@ export function UploadDropzone() {
           router.push(`/sessions/${session.id}`);
         }
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : "Upload failed. Please try again.");
+        setError(err instanceof ApiError ? err.message : "Upload failed. Try again.");
       } finally {
         setIsUploading(false);
+        setProgress(null);
       }
     },
     [router],
@@ -79,7 +85,7 @@ export function UploadDropzone() {
 
   if (pendingSheetSession) {
     return (
-      <div className="w-full max-w-lg rounded-lg border border-line bg-surface p-6 shadow-floating">
+      <div className="w-full rounded-lg border border-line bg-surface p-6 shadow-floating">
         <h2 className="mb-2 font-display text-lg font-medium text-ink">Choose a sheet</h2>
         <p className="mb-4 text-sm text-ink-tertiary">
           &quot;{pendingSheetSession.original_filename}&quot; has multiple sheets. Pick the one to
@@ -115,14 +121,14 @@ export function UploadDropzone() {
           disabled={isUploading}
           className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong disabled:opacity-50"
         >
-          {isUploading ? "Loading…" : "Continue"}
+          {isUploading ? "Loading…" : "Analyze this sheet"}
         </button>
       </div>
     );
   }
 
   return (
-    <div className="flex w-full max-w-lg flex-col items-center gap-3">
+    <div className="flex w-full flex-col gap-3">
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -133,33 +139,58 @@ export function UploadDropzone() {
           e.preventDefault();
           setIsDragging(false);
           const file = e.dataTransfer.files[0];
-          if (file) void handleFile(file);
+          if (file && !isUploading) void handleFile(file);
         }}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => {
+          if (!isUploading) inputRef.current?.click();
+        }}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          if ((e.key === "Enter" || e.key === " ") && !isUploading) {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
         }}
         aria-label="Upload a dataset file"
         className={cn(
-          "flex w-full cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed p-12 text-center transition-all duration-150",
+          "flex min-h-[15rem] w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-10 text-center transition-colors duration-150",
           isDragging
-            ? "scale-[1.01] border-accent bg-accent/[0.06]"
+            ? "border-accent bg-accent/[0.06]"
             : "border-line-strong bg-surface hover:border-ink-tertiary",
         )}
       >
-        {isDragging ? (
-          <FileUp size={26} className="text-accent" />
+        {isUploading ? (
+          <div className="flex w-full max-w-xs flex-col items-center gap-3" aria-live="polite">
+            <SignalMeter />
+            <p className="max-w-full truncate font-medium text-ink">{fileName}</p>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-surface-3">
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-200"
+                style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
+              />
+            </div>
+            <p className="tabular text-sm text-ink-tertiary">
+              {progress !== null && progress < 1
+                ? `Uploading ${Math.round(progress * 100)}%`
+                : "Reading and profiling the file…"}
+            </p>
+          </div>
         ) : (
-          <UploadCloud size={26} className="text-ink-tertiary" />
+          <>
+            {isDragging ? (
+              <FileUp size={26} className="text-accent" />
+            ) : (
+              <UploadCloud size={26} className="text-ink-tertiary" />
+            )}
+            <p className="font-medium text-ink">
+              {isDragging ? "Drop to upload" : "Drag a file here, or click to browse"}
+            </p>
+            <p className="text-sm text-ink-tertiary">
+              CSV, TSV, Excel, JSON, or Parquet, up to 200 MB
+            </p>
+          </>
         )}
-        <p className="font-medium text-ink">
-          {isUploading ? "Uploading…" : "Drag & drop a dataset, or click to browse"}
-        </p>
-        <p className="text-sm text-ink-tertiary">
-          CSV, TSV, Excel, JSON, or Parquet — up to 200 MB
-        </p>
         <input
           ref={inputRef}
           type="file"
@@ -172,10 +203,14 @@ export function UploadDropzone() {
           }}
         />
       </div>
-      {error && <p className="text-sm text-critical">{error}</p>}
+      {error && (
+        <p className="text-sm text-critical" role="alert">
+          {error}
+        </p>
+      )}
       <p className="text-xs text-ink-tertiary">
-        Data you upload may be sent to a third-party LLM provider for analysis. Prefer public or
-        non-sensitive datasets.
+        The agent sends column names, summary statistics, and a few sample rows to a third-party LLM
+        provider. Prefer public or non-sensitive datasets.
       </p>
     </div>
   );

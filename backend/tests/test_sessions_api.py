@@ -103,7 +103,9 @@ def test_list_and_get_session(client: TestClient) -> None:
 
     listing = client.get("/sessions")
     assert listing.status_code == 200
-    assert any(s["id"] == session_id for s in listing.json())
+    summary = next(s for s in listing.json() if s["id"] == session_id)
+    assert summary["agent_status"] == "not_started"
+    assert summary["target_column"] is None
 
     detail = client.get(f"/sessions/{session_id}")
     assert detail.status_code == 200
@@ -141,3 +143,24 @@ def test_delete_session_removes_it_and_its_storage_object(
     assert deleted.status_code == 204
     assert client.get(f"/sessions/{session_id}").status_code == 404
     assert len(fake_storage.objects) == 0
+
+
+def test_list_sample_datasets(client: TestClient) -> None:
+    response = client.get("/sessions/samples")
+    assert response.status_code == 200
+    keys = {s["key"] for s in response.json()}
+    assert {"titanic", "california_housing", "iris_no_label"} <= keys
+
+
+def test_create_session_from_sample(client: TestClient) -> None:
+    response = client.post("/sessions/samples/california_housing")
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["original_filename"] == "house_prices.csv"
+    assert body["row_count"] == 300
+    assert "MedHouseVal" in [c["name"] for c in body["profile"]["columns"]]
+
+
+def test_create_session_from_unknown_sample_404(client: TestClient) -> None:
+    assert client.post("/sessions/samples/nope").status_code == 404

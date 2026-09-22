@@ -26,6 +26,8 @@ questions about the data or any step at any time.
 - **Passwordless auth** — email magic-link sign-in, no external OAuth app to register.
 - **Any tabular file** — CSV, TSV, Excel (with sheet selection), JSON/JSONL, Parquet, up to
   a configurable size limit.
+- **Built-in sample datasets**: six small synthetic datasets (classification, regression, imbalance,
+  clustering, time series, messy data), so you can try the whole flow without a file of your own.
 - **Automatic profiling** — column types, missingness, distributions, a data-quality score,
   and a virtualized preview table, computed the moment a file is uploaded.
 - **An agent that plans out loud** — detects the problem type (classification, regression,
@@ -33,6 +35,8 @@ questions about the data or any step at any time.
   skip before it runs anything.
 - **Sandboxed, reproducible execution** — one Jupyter kernel per session, in a network-isolated
   Docker container; every action is a real notebook cell, not a canned chart.
+- **Live progress tracker**: a stage-by-stage view of where the agent is and whether it's waiting
+  on you, plus LLM call and cost usage for the session.
 - **Human-in-the-loop decisions** — the agent pauses at target confirmation, plan approval,
   feature-engineering choices, and baseline-model approval, always with a recommended default.
 - **Ask about your data anytime** — a chat panel grounded in the actual notebook cells and

@@ -18,6 +18,9 @@ class SessionSummary(BaseModel):
     row_count: int | None
     column_count: int | None
     created_at: datetime
+    agent_status: AgentStatus
+    problem_type: ProblemType | None
+    target_column: str | None
 
     model_config = {"from_attributes": True}
 
@@ -28,12 +31,10 @@ class SessionDetail(SessionSummary):
     error_message: str | None
     profile: DatasetProfile | None
 
-    # Agent state (Phase 3)
-    problem_type: ProblemType | None
-    target_column: str | None
-    agent_status: AgentStatus
+    # Agent state (Phase 3); agent_status/problem_type/target_column are on SessionSummary.
     agent_error_message: str | None
     plan_steps: list[str] | None
+    plan_step_index: int
     llm_calls_used: int
     auto_decide: bool
 
@@ -64,3 +65,9 @@ class PreviewResponse(BaseModel):
     offset: int
     limit: int
     rows: list[dict[str, Any]]
+
+
+class SampleDatasetOut(BaseModel):
+    key: str
+    title: str
+    description: str

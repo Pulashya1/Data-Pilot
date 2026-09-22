@@ -48,6 +48,9 @@ export interface SessionSummary {
   row_count: number | null;
   column_count: number | null;
   created_at: string;
+  agent_status: AgentStatus;
+  problem_type: ProblemType | null;
+  target_column: string | null;
 }
 
 export interface SessionDetail extends SessionSummary {
@@ -56,17 +59,22 @@ export interface SessionDetail extends SessionSummary {
   error_message: string | null;
   profile: DatasetProfile | null;
 
-  // Agent state (Phase 3, MASTER_PROMPT.md §12)
-  problem_type: ProblemType | null;
-  target_column: string | null;
-  agent_status: AgentStatus;
+  // Agent state (Phase 3, MASTER_PROMPT.md §12); agent_status/problem_type/target_column are
+  // on SessionSummary.
   agent_error_message: string | null;
   plan_steps: string[] | null;
+  plan_step_index: number;
   llm_calls_used: number;
   auto_decide: boolean;
 
   // Q&A (Phase 7, MASTER_PROMPT.md §5.6, §12)
   expertise_level: ExpertiseLevel;
+}
+
+export interface SampleDataset {
+  key: string;
+  title: string;
+  description: string;
 }
 
 export interface PreviewRow {

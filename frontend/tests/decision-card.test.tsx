@@ -22,13 +22,11 @@ function targetDecision(overrides: Partial<DecisionOut> = {}): DecisionOut {
 describe("DecisionCard", () => {
   it("shows the question, reasoning, and one button per option", () => {
     render(<DecisionCard decision={targetDecision()} onAnswer={vi.fn()} />);
-    expect(
-      screen.getByText("What's the prediction target and problem type?"),
-    ).toBeTruthy();
+    expect(screen.getByText("What's the prediction target and problem type?")).toBeTruthy();
     expect(screen.getByText(/strongly suggests/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /churned/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "age" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "(no target)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /no target/i })).toBeTruthy();
   });
 
   it("answers with the clicked option for a target_confirmation decision", () => {
@@ -51,5 +49,69 @@ describe("DecisionCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(onAnswer).toHaveBeenCalledWith("d1", "overview,missing_values");
+  });
+
+  it("shows readable template titles in the plan when provided", () => {
+    const decision = targetDecision({
+      kind: "plan_approval",
+      options: ["overview", "correlations"],
+      recommended_option: "overview",
+    });
+    render(
+      <DecisionCard
+        decision={decision}
+        onAnswer={vi.fn()}
+        templates={{
+          overview: { key: "overview", title: "Dataset overview", description: "Shape and types" },
+        }}
+      />,
+    );
+    expect(screen.getByText("Dataset overview")).toBeTruthy();
+    expect(screen.getByText("Shape and types")).toBeTruthy();
+  });
+
+  it("answers 'recommended' for feature engineering by default", () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    const decision = targetDecision({
+      kind: "feature_engineering_approval",
+      question: "Build a preprocessing pipeline with the recommended defaults?",
+      options: ["recommended"],
+      recommended_option: "recommended",
+    });
+    render(<DecisionCard decision={decision} onAnswer={onAnswer} columns={["age"]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Use recommended settings" }));
+    expect(onAnswer).toHaveBeenCalledWith("d1", "recommended");
+  });
+
+  it("sends only changed feature-engineering settings as a JSON override", () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    const decision = targetDecision({
+      kind: "feature_engineering_approval",
+      options: ["recommended"],
+      recommended_option: "recommended",
+    });
+    render(<DecisionCard decision={decision} onAnswer={onAnswer} columns={["age", "zip"]} />);
+    fireEvent.click(screen.getByRole("button", { name: /customize/i }));
+    fireEvent.change(screen.getByLabelText("Scale numeric features"), {
+      target: { value: "none" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "zip" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build with these settings" }));
+    expect(onAnswer).toHaveBeenCalledWith(
+      "d1",
+      JSON.stringify({ scaling: "none", drop_columns: ["zip"] }),
+    );
+  });
+
+  it("maps baseline buttons to yes/no answers", () => {
+    const onAnswer = vi.fn().mockResolvedValue(undefined);
+    const decision = targetDecision({
+      kind: "baseline_approval",
+      options: ["yes", "no"],
+      recommended_option: "yes",
+    });
+    render(<DecisionCard decision={decision} onAnswer={onAnswer} />);
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onAnswer).toHaveBeenCalledWith("d1", "no");
   });
 });

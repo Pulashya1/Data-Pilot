@@ -34,3 +34,6 @@ Thumbs.db
 # Data / artifacts (never commit uploaded datasets or generated notebooks)
 backend/eval/data/
 *.ipynb_checkpoints/
+
+# Local Claude Code guidance
+CLAUDE.md

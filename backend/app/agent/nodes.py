@@ -183,10 +183,7 @@ async def plan_node(state: AgentState) -> dict[str, Any]:
             question="Which analysis steps should run, and in what order?",
             options=EDA_PLAN_TEMPLATE_KEYS,
             recommended_option=",".join(steps),
-            reasoning=(
-                "Deterministic template order for the confirmed problem type "
-                "(MASTER_PROMPT.md §5.3)."
-            ),
+            reasoning="Deterministic template order for the confirmed problem type.",
         )
 
     # §5.1 INTERRUPT (unless auto-decide is on): pauses here until the user approves, reorders,
@@ -265,6 +262,8 @@ async def execute_step_node(state: AgentState) -> dict[str, Any]:
     template_key = state["plan"][index]
     session.plan_step_index = index + 1
     await _run_template_and_report(deps, session, template_key)
+    # step_index is the number of plan steps completed so far, so the UI can show progress.
+    await deps.bus.publish(session_id, PlanUpdateEvent(steps=state["plan"], step_index=index + 1))
     return {"step_index": index + 1}
 
 
@@ -289,8 +288,8 @@ async def feature_engineering_node(state: AgentState) -> dict[str, Any]:
             recommended_option="recommended",
             reasoning=(
                 "Median/most-frequent imputation, standard-scaled numeric features, one-hot "
-                "encoded low-cardinality categoricals, and dropped constant/ID-like columns "
-                "(MASTER_PROMPT.md §5.1 step 5). Reply with a JSON object to override any of "
+                "encoded low-cardinality categoricals, and dropped constant/ID-like columns. "
+                "Reply with a JSON object to override any of "
                 "numeric_impute, categorical_impute, scaling, high_cardinality_threshold, "
                 "test_size, drop_columns instead of 'recommended'."
             ),

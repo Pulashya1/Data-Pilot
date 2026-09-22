@@ -8,6 +8,7 @@ import type {
   NotebookCell,
   PreviewResponse,
   RequestLinkResponse,
+  SampleDataset,
   SessionDetail,
   SessionSummary,
   TemplateInfo,
@@ -64,10 +65,49 @@ export function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health");
 }
 
-export function uploadSession(file: File): Promise<SessionDetail> {
+/** Uploads a dataset. Uses XMLHttpRequest rather than fetch because only XHR reports upload
+ * progress, which matters for files in the hundreds of megabytes. `onProgress` gets 0 to 1. */
+export function uploadSession(
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<SessionDetail> {
   const formData = new FormData();
   formData.append("file", file);
-  return request<SessionDetail>("/sessions", { method: "POST", body: formData });
+  if (!onProgress || typeof XMLHttpRequest === "undefined") {
+    return request<SessionDetail>("/sessions", { method: "POST", body: formData });
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}/sessions`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // non-JSON body; handled below
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as SessionDetail);
+      } else {
+        const detail = (body as { detail?: unknown } | null)?.detail;
+        reject(new ApiError(typeof detail === "string" ? detail : xhr.statusText, xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError("Network error during upload.", 0));
+    xhr.send(formData);
+  });
+}
+
+export function listSamples(): Promise<SampleDataset[]> {
+  return request<SampleDataset[]>("/sessions/samples");
+}
+
+export function createSampleSession(key: string): Promise<SessionDetail> {
+  return request<SessionDetail>(`/sessions/samples/${key}`, { method: "POST" });
 }
 
 export function listSessions(): Promise<SessionSummary[]> {
@@ -202,16 +242,25 @@ export function subscribeToAgentStream(
   return () => source.close();
 }
 
-export async function exportNotebook(
-  sessionId: string,
-  includeData: boolean,
-  includePipeline = false,
-  includeExploratory = false,
-): Promise<void> {
-  const res = await fetch(
-    `${API_BASE_URL}/sessions/${sessionId}/notebook/export?include_data=${includeData}&include_pipeline=${includePipeline}&include_exploratory=${includeExploratory}`,
-    { method: "POST", cache: "no-store", credentials: "include" },
-  );
+export interface ExportOptions {
+  format: "zip" | "html";
+  includeData?: boolean;
+  includePipeline?: boolean;
+  includeExploratory?: boolean;
+}
+
+export async function exportNotebook(sessionId: string, options: ExportOptions): Promise<void> {
+  const params = new URLSearchParams({
+    format: options.format,
+    include_data: String(options.includeData ?? false),
+    include_pipeline: String(options.includePipeline ?? false),
+    include_exploratory: String(options.includeExploratory ?? false),
+  });
+  const res = await fetch(`${API_BASE_URL}/sessions/${sessionId}/notebook/export?${params}`, {
+    method: "POST",
+    cache: "no-store",
+    credentials: "include",
+  });
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -225,7 +274,8 @@ export async function exportNotebook(
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const match = /filename="?([^"]+)"?/.exec(disposition);
-  const filename = match?.[1] ?? "datapilot_export.zip";
+  const filename =
+    match?.[1] ?? (options.format === "html" ? "datapilot_report.html" : "datapilot_export.zip");
 
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

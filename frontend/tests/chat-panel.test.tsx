@@ -87,4 +87,38 @@ describe("ChatPanel", () => {
     });
     expect(onPrefillConsumed).toHaveBeenCalled();
   });
+
+  it("turns @cell references into buttons that report the cell position", async () => {
+    vi.mocked(api.getMessages).mockResolvedValue([
+      message({ content: "See @cell-4 for the outliers." }),
+    ]);
+    const onCellLinkClick = vi.fn();
+    render(<ChatPanel sessionId="s1" onCellLinkClick={onCellLinkClick} />);
+    fireEvent.click(await screen.findByRole("button", { name: "@cell-4" }));
+    expect(onCellLinkClick).toHaveBeenCalledWith(4);
+  });
+
+  it("sends a suggested question when clicked", async () => {
+    vi.mocked(api.getMessages).mockResolvedValue([]);
+    vi.mocked(api.askQuestion).mockResolvedValue(message());
+    render(<ChatPanel sessionId="s1" />);
+    fireEvent.click(await screen.findByRole("button", { name: /biggest data quality problems/ }));
+    await waitFor(() =>
+      expect(api.askQuestion).toHaveBeenCalledWith(
+        "s1",
+        "What are the biggest data quality problems here?",
+      ),
+    );
+  });
+
+  it("keeps the question in the box when sending fails", async () => {
+    vi.mocked(api.getMessages).mockResolvedValue([]);
+    vi.mocked(api.askQuestion).mockRejectedValue(new api.ApiError("Over budget", 429));
+    render(<ChatPanel sessionId="s1" />);
+    const box = screen.getByPlaceholderText(/ask a question/i) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "why?" } });
+    fireEvent.click(screen.getByRole("button", { name: /^ask$/i }));
+    expect(await screen.findByText("Over budget")).toBeTruthy();
+    expect(box.value).toBe("why?");
+  });
 });

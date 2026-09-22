@@ -1,36 +1,37 @@
 "use client";
 
-import { CircleDot, Download } from "lucide-react";
+import { ChevronDown, CircleDot, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { PanelHeader, PanelTitle } from "@/components/ui/panel";
-import { ApiError, exportNotebook, getKernelStatus, listTemplates, runTemplate } from "@/lib/api";
+import { SignalMeter } from "@/components/ui/signal-meter";
+import { ApiError, getKernelStatus, runTemplate } from "@/lib/api";
 import type { KernelStatusOut, TemplateInfo } from "@/types";
 
+const COLLAPSED_COUNT = 6;
+
+/** Runs one analysis template on demand, outside the agent's plan. Each run appends a cell to
+ * the notebook. */
 export function AnalysisActions({
   sessionId,
+  templates,
+  disabled = false,
   onRunComplete,
 }: {
   sessionId: string;
-  onRunComplete: () => void;
+  templates: TemplateInfo[];
+  /** True while the agent is running, so manual runs don't race it in the same kernel. */
+  disabled?: boolean;
+  onRunComplete: (templateKey: string) => void;
 }) {
-  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
-  const [kernel, setKernel] = useState<KernelStatusOut["status"]>("stopped");
+  const [kernel, setKernel] = useState<KernelStatusOut | null>(null);
   const [runningKey, setRunningKey] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [includePipeline, setIncludePipeline] = useState(false);
-  const [includeExploratory, setIncludeExploratory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
-    listTemplates()
-      .then(setTemplates)
-      .catch((err: unknown) =>
-        setError(err instanceof ApiError ? err.message : "Could not load templates."),
-      );
     getKernelStatus(sessionId)
-      .then((res) => setKernel(res.status))
+      .then(setKernel)
       .catch(() => undefined);
   }, [sessionId]);
 
@@ -39,8 +40,8 @@ export function AnalysisActions({
     setError(null);
     try {
       await runTemplate(sessionId, key);
-      onRunComplete();
-      setKernel("running");
+      onRunComplete(key);
+      setKernel(await getKernelStatus(sessionId));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not run analysis.");
     } finally {
@@ -48,72 +49,62 @@ export function AnalysisActions({
     }
   };
 
-  const handleExport = async () => {
-    setExporting(true);
-    setError(null);
-    try {
-      await exportNotebook(sessionId, false, includePipeline, includeExploratory);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not export notebook.");
-    } finally {
-      setExporting(false);
-    }
-  };
+  const kernelRunning = kernel?.status === "running";
+  // The full catalog is long; show the generic EDA core until asked for the rest.
+  const shown = expanded ? templates : templates.slice(0, COLLAPSED_COUNT);
 
   return (
     <div className="rounded-lg border border-line bg-surface">
       <PanelHeader>
-        <div className="flex items-center gap-2">
-          <PanelTitle>Run analysis</PanelTitle>
-          <Badge tone={kernel === "running" ? "success" : "neutral"} className="gap-1">
-            <CircleDot size={9} className={kernel === "running" ? "animate-pulse" : ""} />
-            kernel: {kernel}
-          </Badge>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
-            <input
-              type="checkbox"
-              checked={includePipeline}
-              onChange={(e) => setIncludePipeline(e.target.checked)}
-              className="accent-accent"
-            />
-            Include fitted pipeline
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
-            <input
-              type="checkbox"
-              checked={includeExploratory}
-              onChange={(e) => setIncludeExploratory(e.target.checked)}
-              className="accent-accent"
-            />
-            Include Q&amp;A cells
-          </label>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleExport()}
-            disabled={exporting}
-          >
-            <Download size={12} />
-            {exporting ? "Exporting…" : "Export notebook"}
-          </Button>
-        </div>
+        <PanelTitle>Run a single analysis</PanelTitle>
+        <Badge tone={kernelRunning ? "success" : "neutral"} className="gap-1">
+          <CircleDot size={9} />
+          Kernel {kernelRunning ? "running" : "stopped"}
+          {kernel && kernel.compute_seconds_used > 0 && (
+            <span className="tabular font-normal opacity-80">
+              , {Math.round(kernel.compute_seconds_used)}s used
+            </span>
+          )}
+        </Badge>
       </PanelHeader>
-      <div className="flex flex-wrap gap-2 p-4">
-        {templates.map((t) => (
-          <Button
-            key={t.key}
-            variant="secondary"
-            size="sm"
-            title={t.description}
-            onClick={() => void run(t.key)}
-            disabled={runningKey !== null}
-          >
-            {runningKey === t.key ? "Running…" : t.title}
-          </Button>
+      <p className="px-4 pt-3 text-xs text-ink-tertiary">
+        {disabled
+          ? "Available once the agent pauses or finishes."
+          : "Each run adds a cell to the notebook. The first run starts the kernel, which takes a few seconds."}
+      </p>
+      <ul className="grid gap-2 px-4 pb-3 pt-3 sm:grid-cols-2">
+        {shown.map((t) => (
+          <li key={t.key}>
+            <button
+              type="button"
+              onClick={() => void run(t.key)}
+              disabled={disabled || runningKey !== null}
+              className="group flex h-full w-full items-start gap-2.5 rounded-md border border-line bg-surface-2 px-3 py-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="mt-0.5 shrink-0 text-ink-tertiary group-hover:text-accent">
+                {runningKey === t.key ? <SignalMeter /> : <Play size={12} />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-ink">{t.title}</span>
+                <span className="mt-0.5 block text-xs leading-snug text-ink-tertiary">
+                  {t.description}
+                </span>
+              </span>
+            </button>
+          </li>
         ))}
-      </div>
+      </ul>
+      {templates.length > COLLAPSED_COUNT && (
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          aria-expanded={expanded}
+          className="mx-4 mb-4 flex items-center gap-1 text-xs font-medium text-ink-secondary hover:text-accent"
+        >
+          <ChevronDown size={12} className={expanded ? "rotate-180" : ""} />
+          {expanded ? "Show fewer" : `Show all ${templates.length} analyses`}
+        </button>
+      )}
       {error && <p className="px-4 pb-3 text-xs text-critical">{error}</p>}
     </div>
   );

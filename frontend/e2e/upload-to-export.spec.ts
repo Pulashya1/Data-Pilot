@@ -66,16 +66,17 @@ test("upload -> confirm target -> approve plan -> answer a decision -> download 
   });
   await page.getByRole("button", { name: "Approve plan" }).click();
 
-  // 6. Answer the feature-engineering decision — its only option is "recommended".
+  // 6. Answer the feature-engineering decision with the recommended defaults.
   await expect(page.getByText("Build a preprocessing pipeline")).toBeVisible({
     timeout: 120_000,
   });
-  await page.getByRole("button", { name: /^recommended/ }).click();
+  await page.getByRole("button", { name: "Use recommended settings" }).click();
 
-  // 7. Download the exported notebook.
+  // 7. Download the exported notebook from the Export menu.
+  await page.getByRole("button", { name: "Export" }).click();
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("button", { name: "Export notebook" }).click(),
+    page.getByRole("menuitem", { name: /Notebook/ }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/\.zip$/);
 });

@@ -22,11 +22,13 @@ from app.data.loaders import (
     load_dataset,
 )
 from app.data.profiling import build_profile, rows_to_json_safe
+from app.data.samples import SAMPLE_DATASETS
 from app.models.session import FileType, SessionStatus, UploadSession
 from app.models.user import User
 from app.schemas.dataset import DatasetProfile
 from app.schemas.session import (
     PreviewResponse,
+    SampleDatasetOut,
     SessionDetail,
     SessionSettingsRequest,
     SessionSummary,
@@ -79,33 +81,29 @@ def _ingest(
     return result, profile, preview_rows
 
 
-@router.post("", response_model=SessionDetail, status_code=201)
-async def create_session(
-    file: UploadFile,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    settings: Annotated[Settings, Depends(get_settings)],
-    user: Annotated[User, Depends(get_current_user)],
+async def _create_session_from_bytes(
+    raw: bytes,
+    filename: str,
+    content_type: str | None,
+    *,
+    db: AsyncSession,
+    storage: StorageBackend,
+    settings: Settings,
+    user: User,
 ) -> UploadSession:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="A filename is required.")
-
+    """Stores `raw`, then profiles it, shared by real uploads and the built-in samples."""
     try:
-        file_type = detect_file_type(file.filename)
+        file_type = detect_file_type(filename)
     except UnsupportedFileTypeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    raw = await _read_upload(file, settings.max_upload_size_mb * 1024 * 1024)
-    if not raw:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    safe_name = _sanitize_filename(file.filename)
+    safe_name = _sanitize_filename(filename)
     session = UploadSession(
         user_id=user.id,
         original_filename=safe_name,
         storage_key="",
         file_type=file_type,
-        mime_type=file.content_type,
+        mime_type=content_type,
         size_bytes=len(raw),
         status=SessionStatus.UPLOADED,
     )
@@ -113,9 +111,7 @@ async def create_session(
     await db.flush()
 
     session.storage_key = f"{session.id}/{safe_name}"
-    storage.upload(
-        session.storage_key, io.BytesIO(raw), file.content_type or "application/octet-stream"
-    )
+    storage.upload(session.storage_key, io.BytesIO(raw), content_type or "application/octet-stream")
 
     try:
         _, profile, preview_rows = _ingest(raw, file_type, None, settings)
@@ -139,6 +135,57 @@ async def create_session(
         session.selected_sheet = session.sheet_names[0] if session.sheet_names else None
     await db.commit()
     return session
+
+
+@router.post("", response_model=SessionDetail, status_code=201)
+async def create_session(
+    file: UploadFile,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> UploadSession:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A filename is required.")
+    # Validate the extension before reading the body, so an unsupported file fails fast.
+    try:
+        detect_file_type(file.filename)
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    raw = await _read_upload(file, settings.max_upload_size_mb * 1024 * 1024)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    return await _create_session_from_bytes(
+        raw, file.filename, file.content_type, db=db, storage=storage, settings=settings, user=user
+    )
+
+
+@router.get("/samples", response_model=list[SampleDatasetOut])
+async def list_sample_datasets() -> list[SampleDatasetOut]:
+    return [
+        SampleDatasetOut(key=s.key, title=s.title, description=s.description)
+        for s in SAMPLE_DATASETS.values()
+    ]
+
+
+@router.post("/samples/{sample_key}", response_model=SessionDetail, status_code=201)
+async def create_sample_session(
+    sample_key: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> UploadSession:
+    """Starts a session from one of the built-in synthetic datasets (`app/data/samples.py`),
+    so a new user can see the whole flow without having a file of their own to hand."""
+    sample = SAMPLE_DATASETS.get(sample_key)
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sample dataset '{sample_key}'.")
+    raw = sample.build().to_csv(index=False).encode("utf-8")
+    return await _create_session_from_bytes(
+        raw, sample.filename, "text/csv", db=db, storage=storage, settings=settings, user=user
+    )
 
 
 @router.post("/{session_id}/sheet", response_model=SessionDetail)
