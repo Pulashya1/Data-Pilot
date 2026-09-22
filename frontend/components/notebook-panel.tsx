@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { CellOutput, NotebookCell } from "@/types";
@@ -32,7 +33,18 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
 
-type MarkdownTag = "h1" | "h2" | "h3" | "p" | "ul" | "ol" | "strong" | "code";
+type MarkdownTag = "h1" | "h2" | "h3" | "p" | "ul" | "ol" | "strong" | "code" | "th" | "td" | "del";
+
+/** GitHub-flavored markdown (tables, strikethrough), which LLM answers use freely. */
+export const MARKDOWN_PLUGINS = [remarkGfm];
+
+function MarkdownTable({ node: _node, ...props }: React.HTMLAttributes<HTMLElement> & ExtraProps) {
+  return (
+    <div className="styled-scrollbar my-2 overflow-x-auto rounded-md border border-line">
+      <table {...props} className="w-full border-collapse text-left text-xs" />
+    </div>
+  );
+}
 
 /** A react-markdown component for `tag` with fixed styling. Drops the `node` prop that
  * react-markdown passes, so it doesn't end up as a DOM attribute. */
@@ -59,6 +71,13 @@ export const MARKDOWN_COMPONENTS = {
     "code",
     "rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.85em] text-ink",
   ),
+  table: MarkdownTable,
+  th: markdownElement(
+    "th",
+    "border-b border-line bg-surface-2 px-2.5 py-1.5 font-medium text-ink-secondary",
+  ),
+  td: markdownElement("td", "tabular border-t border-line px-2.5 py-1.5"),
+  del: markdownElement("del", "text-ink-tertiary"),
 };
 
 function OutputView({ output }: { output: CellOutput }) {
@@ -90,7 +109,7 @@ function OutputView({ output }: { output: CellOutput }) {
       <img
         src={`data:image/png;base64,${png}`}
         alt="Chart output from this cell"
-        className="max-w-full rounded border border-line bg-white"
+        className="h-auto w-auto max-w-full rounded border border-line bg-white sm:max-w-[42rem]"
       />
     );
   }
@@ -248,7 +267,9 @@ function CellCard({
           ring,
         )}
       >
-        <ReactMarkdown components={MARKDOWN_COMPONENTS}>{cell.source}</ReactMarkdown>
+        <ReactMarkdown components={MARKDOWN_COMPONENTS} remarkPlugins={MARKDOWN_PLUGINS}>
+          {cell.source}
+        </ReactMarkdown>
       </div>
     );
   }

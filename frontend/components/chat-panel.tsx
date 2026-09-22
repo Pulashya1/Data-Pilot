@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { MARKDOWN_COMPONENTS, markdownElement } from "@/components/notebook-panel";
+import {
+  MARKDOWN_COMPONENTS,
+  MARKDOWN_PLUGINS,
+  markdownElement,
+} from "@/components/notebook-panel";
 import { SignalMeter } from "@/components/ui/signal-meter";
 import { ApiError, askQuestion, getMessages } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -46,6 +50,7 @@ function MessageBody({
 }) {
   return (
     <ReactMarkdown
+      remarkPlugins={MARKDOWN_PLUGINS}
       components={{
         ...MARKDOWN_COMPONENTS,
         p: CHAT_P,

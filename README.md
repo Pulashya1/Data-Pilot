@@ -64,30 +64,45 @@ the only reliable way to embed one without leaving the page open in a new tab.)
 
 ## Screenshots
 
-| Screenshot | Save as |
-|---|---|
-| Login page — email input, "Send magic link" | `docs/screenshots/login.png` |
-| Upload page — the dropzone for uploading a dataset | `docs/screenshots/upload.png` |
-| Sessions list | `docs/screenshots/sessions-list.png` |
-| Session workspace — data quality, column stats, and the chat panel answering a question | `docs/screenshots/data-quality-chat.png` |
-| "Run analysis" panel and the agent paused on a feature-engineering decision | `docs/screenshots/agent-decisions.png` |
-| Notebook panel — generated cells (imports, config, data loading) | `docs/screenshots/notebook-panel.png` |
-| Notebook panel — a correlation analysis cell with its heatmap output | `docs/screenshots/notebook-correlation.png` |
-| Chat panel — a cell-grounded answer (`@cell-N` reference) | `docs/screenshots/chat-panel.png` |
+Captured from a real session on the built-in "Passenger survival" sample, with DeepSeek as the
+LLM.
+
+**Sign in.** A one-time email link, no password.
 
 ![Login page](docs/screenshots/login.png)
 
+**Start an analysis.** Upload a file or pick a sample dataset. The steps a session goes through
+are laid out below.
+
 ![Upload page](docs/screenshots/upload.png)
+
+**Sessions.** Each dataset shows how far the agent got, plus the problem type and target once
+they're confirmed.
 
 ![Sessions list](docs/screenshots/sessions-list.png)
 
-![Data quality and chat](docs/screenshots/data-quality-chat.png)
+**A decision point.** The progress tracker shows the agent waiting at the Features stage. The
+preprocessing settings are open for editing, with the recommended defaults preselected.
 
 ![Agent decisions](docs/screenshots/agent-decisions.png)
 
+**Data overview.** Dataset facts, the data quality score, and a column table with a range
+glyph for each numeric column, next to the chat panel.
+
+![Data quality and chat](docs/screenshots/data-quality-chat.png)
+
+**The notebook.** Every step is a real cell run in the sandboxed kernel. Cells can be copied,
+reverted to, or asked about.
+
 ![Notebook panel](docs/screenshots/notebook-panel.png)
 
+**An analysis cell.** The correlations template's code (long cells start collapsed) and its
+heatmap output.
+
 ![Notebook correlation heatmap](docs/screenshots/notebook-correlation.png)
+
+**A cell-grounded answer.** Asking about `@cell-17` pulls that cell's code and output into the
+answer. The reference links back to the cell.
 
 ![Chat panel](docs/screenshots/chat-panel.png)
 
@@ -282,7 +297,7 @@ DataPilot/
 │   ├── lib/                  # API client, theme handling, severity config
 │   └── e2e/                   # Playwright end-to-end test
 ├── docs/
-│   ├── screenshots/            # Login/upload screenshots — see "Screenshots" above
+│   ├── screenshots/            # README screenshots — see "Screenshots" above
 │   └── demo.mp4                 # Screen-recorded demo — see "Demo" above
 └── docker-compose.yml
 ```

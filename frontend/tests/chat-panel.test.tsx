@@ -121,4 +121,14 @@ describe("ChatPanel", () => {
     expect(await screen.findByText("Over budget")).toBeTruthy();
     expect(box.value).toBe("why?");
   });
+
+  it("renders markdown tables in answers as tables", async () => {
+    vi.mocked(api.getMessages).mockResolvedValue([
+      message({ content: ["| Column | VIF |", "|---|---|", "| Age | 1.02 |"].join("\n") }),
+    ]);
+    render(<ChatPanel sessionId="s1" />);
+    expect(await screen.findByRole("table")).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "VIF" })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: "1.02" })).toBeTruthy();
+  });
 });
