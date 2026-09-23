@@ -52,8 +52,11 @@ def _upload_with_auto_decide(client: TestClient) -> str:
 
 
 def _wait_for_status(
-    client: TestClient, session_id: str, statuses: tuple[str, ...], timeout: float = 20.0
+    client: TestClient, session_id: str, statuses: tuple[str, ...], timeout: float = 60.0
 ) -> dict[str, Any]:
+    # Generous on purpose: the loop returns as soon as the status is reached, but the first full
+    # run in a test session pays for cold imports (sklearn, shap, statsmodels) inside the fake
+    # kernel, which can take well over 20s on a slow CI runner.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         session = client.get(f"/sessions/{session_id}").json()
@@ -63,7 +66,7 @@ def _wait_for_status(
     raise AssertionError(f"agent did not reach {statuses} in time")
 
 
-def _wait_for_agent(client: TestClient, session_id: str, timeout: float = 20.0) -> dict[str, Any]:
+def _wait_for_agent(client: TestClient, session_id: str, timeout: float = 60.0) -> dict[str, Any]:
     return _wait_for_status(client, session_id, ("done", "error"), timeout=timeout)
 
 
